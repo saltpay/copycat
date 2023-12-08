@@ -6,13 +6,8 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# Define your repositories and their paths
-declare -A repos
-repos[transaction-block-manager]="/transaction-block-manager"
-repos[transaction-block-aux]="/transaction-block-aux"
-repos[acquiring-payments-api]="/acquiring-payments-api"
-repos[acceptance-fx-api]="/acceptance-fx-api"
-repos[acceptance-bin-service]="/acceptance-bin-service"
+# Declare target repositories
+set -A repos "acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager"
 
 # Function to display the menu
 function show_menu() {
@@ -67,4 +62,4 @@ for index in $selected_repos; do
     process_repo $repo_name
 done
 
-echo "${BLUE} 😸 Thank you for using Copycat! ${NC}"
+echo "${BLUE} 😸 Finished, thank you for using Copycat! ${NC}"

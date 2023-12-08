@@ -12,6 +12,7 @@ then
     exit 1
 fi
 
+# This script assumes it is being run from the root of the repository
 # Check if there are changes in the k8s/chart folder
 if git diff --name-only origin/main | grep -q "k8s/chart"; then
     echo "${BLUE} 🦧 Changes detected in k8s/chart... ${NC}"
