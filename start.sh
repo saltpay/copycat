@@ -2,6 +2,7 @@
 set -e
 
 BLUE='\033[0;34m'
+GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
@@ -34,19 +35,24 @@ selected_repos=(${=choices})
 # Function to process each repository
 function process_repo() {
     local repo_name=$1
-    local repo_path=${repos[$repo_name]}
+    # Create branch with name copycat-YYYY-MM-DD-random
+    local branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
-    if [ -d "../$repo_path" ]; then
+    if [ -d "../$repo_name" ]; then
         echo "${BLUE} 😸 Copying to $repo_name ... ${NC}"
-        cd ../$repo_path
+        cd ../$repo_name
+        # Reset repository to main branch
+        git checkout . > /dev/null 2>&1 
+        git checkout main > /dev/null 2>&1
+        git pull > /dev/null 2>&1
 
+        # Commit changes only on success
         if sh ../copycat/example-change.sh; then
-            # Create branch with name copycat-YYYY-MM-DD-random
-            local branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
             git checkout -b $branch_name > /dev/null 2>&1
             git add . > /dev/null 2>&1
             git commit -m "Copycat changes" > /dev/null 2>&1
             git push origin $branch_name > /dev/null 2>&1
+            echo "${GREEN} 😸 Changes copied to $repo_name. Open a pull request at https://github.com/saltpay/$repo_name/pull/new/$branch_name ${NC}"
         else
             echo "${RED} 😿 There was an error copying changes to $repo_name${NC}"
         fi
