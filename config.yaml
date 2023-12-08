@@ -1,0 +1,33 @@
+github:
+  organization: saltpay
+  # comment auto_discovery_topic to fetch all repos
+  auto_discovery_topic: copycat-subject
+  requires_ticket_topic: requires-ticket
+  slack_room_topic_prefix: slack-
+
+tools:
+  - name: claude
+    command: claude
+    code_args:
+      - --permission-mode
+      - acceptEdits
+    summary_args: []
+  - name: codex
+    command: codex
+    code_args:
+      - exec
+      - --full-auto
+    summary_args: []
+  - name: qwen
+    command: qwen
+    code_args:
+      - --approval-mode
+      - auto-edit
+      - -p
+    summary_args: []
+  - name: gemini
+    command: gemini
+    code_args:
+      - --approval-mode
+      - auto_edit
+    summary_args: []

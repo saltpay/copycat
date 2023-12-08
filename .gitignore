@@ -1,0 +1,25 @@
+/vscode/
+### Mac ###
+.DS_Store
+
+### Git ###
+*.orig
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.classpath
+.project
+.checkstyle
+.settings/
+*.launch
+
+
+### Ephemeral files ###
+log/
+logs/
+.vscode/
