@@ -26,5 +26,6 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
+echo "${BLUE}"
 # Do the find and replace
 find . -type f -not -path "./.git/*" -not -path "./.idea/*" -not -path "./.vscode/*" -not -path "./node_modules/*" -not -path "./mvn/*" -not -path "./certs/*" -exec sed -i '' -e "s/$1/$2/g" {} \;

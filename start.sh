@@ -7,10 +7,21 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # Declare target repositories
-set -A repos "acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager"
+set -a repos "acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager"
+set -a scripts "find-and-replacer" "yaml-changer"
 
-# Function to display the menu
-function show_menu() {
+# Function to display the change select menu
+function show_script_menu() {
+    echo "${BLUE} 😸 What would you like to do? ${NC}"
+    local i=1
+    for repo in "${(@k)repos}"; do
+        echo "$i) $repo"
+        ((i++))
+    done
+}
+
+# Function to display the repo select menu
+function show_repo_menu() {
     echo "${BLUE} 😸 Select the repositories you want to copy your changes to: ${NC}"
     local i=1
     for repo in "${(@k)repos}"; do
@@ -20,12 +31,16 @@ function show_menu() {
 }
 
 # Get user input
-show_menu
-echo "${BLUE} 😸 Enter selections: ${NC}"
-read choices
+show_script_menu
+echo "${BLUE} 😸 Choose an option: ${NC}"
+read script_choice
+show_repo_menu
+echo "${BLUE} 😸 Choose your repos: ${NC}"
+read repo_choices
 
+selected_script=$script_choice
 # Convert choices into an array
-selected_repos=(${=choices})
+selected_repos=(${=repo_choices})
 
 # Function to process each repository
 function process_repo() {
@@ -42,7 +57,7 @@ function process_repo() {
         git pull > /dev/null 2>&1
 
         # Commit changes only on success
-        if sh ../copycat/example-change.sh; then
+        if sh ../copycat/scripts/$selected_script.sh; then
             git checkout -b $branch_name > /dev/null 2>&1
             git add . > /dev/null 2>&1
             git commit -m "Copycat changes" > /dev/null 2>&1
