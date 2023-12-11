@@ -8,16 +8,16 @@ NC='\033[0m' # No Color
 
 branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
-# Declare target repositories
-set -a repos "acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager"
-set -a scripts "find-and-replacer" "yaml-changer" "idempotent-changer"
+# Declare target repositories and scripts
+repos=("acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager")
+scripts=("find-and-replacer" "yaml-changer" "idempotent-changer")
 
 # Function to display the change select menu
 function show_script_menu() {
     echo "${BLUE} 😸 What would you like to do? ${NC}"
     local i=1
-    for repo in "${(@k)repos}"; do
-        echo "$i) $repo"
+    for script in "${scripts[@]}"; do
+        echo "$i) $script"
         ((i++))
     done
 }
@@ -26,7 +26,7 @@ function show_script_menu() {
 function show_repo_menu() {
     echo "${BLUE} 😸 Select the repositories you want to copy your changes to: ${NC}"
     local i=1
-    for repo in "${(@k)repos}"; do
+    for repo in "${repos[@]}"; do
         echo "$i) $repo"
         ((i++))
     done
@@ -46,9 +46,9 @@ function process_repo() {
 
         # Commit changes only on success
         if sh ../copycat/scripts/$selected_script.sh; then
-            git checkout -b $branch_name > /dev/null 2>&1
-            git add . > /dev/null 2>&1
-            git commit -m "Copycat changes" > /dev/null 2>&1
+            git checkout -b $branch_name #> /dev/null 2>&1
+            git add . #> /dev/null 2>&1
+            git commit -m "Copycat changes" #> /dev/null 2>&1
         else
             echo "${RED} 😿 There was an error copying changes to $repo_name${NC}"
         fi
@@ -61,7 +61,7 @@ show_repo_menu
 echo "${BLUE} 😸 Choose the repos you'd like to copy changes to: ${NC}"
 read repo_choices
 # Convert choices into an array
-selected_repos=(${=repo_choices})
+selected_repos=($repo_choices)
 
 while true; do
     # Get user input
@@ -69,11 +69,11 @@ while true; do
     echo "${BLUE} 😸 Choose an option: ${NC}"
     read script_choice
 
-    selected_script=$script_choice
+    selected_script=${scripts[$script_choice - 1]}
 
     # Loop through selected repositories and apply changes
     for index in $selected_repos; do
-        repo_name=$(echo ${(@k)repos} | awk '{print $'"$index"'}')
+        repo_name=${repos[$index-1]}
         process_repo $repo_name
     done
 
@@ -85,7 +85,7 @@ while true; do
     if [[ ! $continue_choice =~ ^[Yy]$ ]]; then
         break
     fi
-end
+done
 
 # Loop through selected repositories and push changes
 for index in $selected_repos; do 
