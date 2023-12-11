@@ -8,6 +8,6 @@ Let's say you want to set the `pdb.maxUnavailable` value in your `values.yaml` f
 
 We're not quite there yet, so you'll have to use your imagination.
 
-Currently we have an `example-change.sh` script that does that change, and bumps the helm chart version. Now let's make that change in all repos.
+Currently we have an `yaml-change.sh` script that does that change, and bumps the helm chart version. Now let's make that change in all repos.
 
 Start copycat using `./start.sh`. Choose your target repos and watch Copycat start copying. You should be able to track progress in the logs, and see the pull requests being created in the target repos.
