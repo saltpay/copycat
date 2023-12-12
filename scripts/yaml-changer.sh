@@ -35,7 +35,7 @@ fi
 echo "${BLUE} 🦧 Running yaml-changer.sh... ${NC}"
 
 # Change yaml file with provided key and value
-yq e ".$key = \"$value\"" "$filename" -i
+yq eval ".$key = \"$value\"" "$filename" -i
 sh ../copycat/scripts/bump-helm-chart.sh
 
 echo "${BLUE} 🦧 Done! ${NC}"
