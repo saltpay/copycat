@@ -3,8 +3,16 @@
 Welcome to Copycat, a way to copy changes from one git repository to another.
 
 <img src="./copycat-logo.png"
-     alt="Markdown Monster icon"
-     style="margin-bottom: 10px;" />
+     alt="Copycat logo"
+     style="margin-bottom: 10px; animation: spin 2s linear infinite; transform-origin: center center;" />
+
+
+<style>
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
 
 ## Copycat functions
 
