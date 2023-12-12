@@ -2,6 +2,10 @@
 
 Welcome to Copycat, a way to copy changes from one git repository to another.
 
+<img src="./copycat-logo.png"
+     alt="Markdown Monster icon"
+     style="margin-bottom: 10px;" />
+
 ## Copycat functions
 
 Copycat currently provides the following functionality:

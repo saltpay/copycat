@@ -35,7 +35,12 @@ fi
 echo "${BLUE} 🦧 Running yaml-changer.sh... ${NC}"
 
 # Change yaml file with provided key and value
-yq eval ".$key = \"$value\"" "$filename" -i
+# Check if value is integer or boolean
+if [[ "$value" =~ ^[0-9]+$ || "$value" =~ ^true$ || "$value" =~ ^false$ ]]; then
+  yq ".$key = $value" "$filename" -i
+else
+  yq ".$key = \"$value\"" "$filename" -i
+fi
 sh ../copycat/scripts/bump-helm-chart.sh
 
 echo "${BLUE} 🦧 Done! ${NC}"
