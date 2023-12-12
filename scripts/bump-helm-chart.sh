@@ -16,7 +16,7 @@ fi
 if git diff --name-only origin/main | grep -q "k8s/chart"; then
     echo "${BLUE} 🦧 Changes detected in k8s/chart... ${NC}"
 
-    new_version=$(echo $(yq e '.version' k8s/chart/Chart.yaml) | awk -F. -v OFS=. '{$3=$3+1;print}')
+    new_version=$(echo $(git show origin/main:k8s/chart/Chart.yaml | yq e '.version' -) | awk -F. -v OFS=. '{$3=$3+1;print}')
 
     yq e ".helm.version = \"$new_version\"" .cicd/deployment.yaml -i
     yq e ".version = \"$new_version\"" k8s/chart/Chart.yaml -i
