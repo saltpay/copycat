@@ -20,11 +20,9 @@ Start Copycat by running `sh start.sh` from the root of this repository. Follow 
 ### `yaml-changer.sh`
 
 This script will change a value in a yaml file, and bump the helm chart version if required. For example:
-`sh yaml-changer.sh -f ./path/to/file.yaml -k key -v value` will change the value of `key` to `value` in `file.yaml`. 
-
-^ This is not working yet in this way (is hardcoded), but will be soon!
+`sh yaml-changer.sh -f ./path/to/file.yaml -k key -v value` will change the value of `key` to `value` in `file.yaml`.
 
 ### `find-and-replace.sh`
 
 This script will find all instances of a string within a repo and replace it with another string. For example:
-`sh find-and-replace.sh find replace` will find all instances of `find` in the repo and replace them with `replace`.
+`sh find-and-replace.sh -f find -r replace` will find all instances of `find` in the repo and replace them with `replace`.

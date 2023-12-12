@@ -10,7 +10,7 @@ branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
 # Declare target repositories and scripts
 repos=("acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager")
-scripts=("find-and-replacer" "yaml-changer" "idempotent-changer")
+scripts=("find-and-replacer" "yaml-changer")
 
 # Function to display the change select menu
 function show_script_menu() {
@@ -26,12 +26,28 @@ function show_options_menu() {
     # Depending on the script chosen, show the options menu
     case $selected_script in
     "find-and-replacer")
-        echo "${BLUE} 😸 Please enter a search string and a replacement string, separated by a space: ${NC}"
+        echo "${BLUE} 😸 Please enter the search string: ${NC}"
+        read -r search_string
+        echo "${BLUE} 😸 Please enter the replacement string: ${NC}"
+        read -r replacement_string
+
+        # Combining the inputs into options with flags
+        options=(-f "$search_string" -r "$replacement_string")
         ;;
     "yaml-changer")
-        echo "${BLUE} 😸 Please enter the target yaml path and target value, separated by a space: ${NC}"
+        echo "${BLUE} 😸 Please enter the target yaml file path: ${NC}"
+        read -r filename
+        echo "${BLUE} 😸 Please enter the target yaml key: ${NC}"
+        read -r key
+        echo "${BLUE} 😸 Please enter the target value: ${NC}"
+        read -r value
+
+        # Combining the inputs into options
+        options=(-k "$key" -v "$value" -f "$filename")
         ;;
-    *) ;;
+    *) 
+        options=()
+        ;;
     esac
 }
 
@@ -45,6 +61,15 @@ function show_repo_menu() {
     done
 }
 
+function commit_changes() {
+    if [ -n "$(git status --porcelain)" ]; then
+        git add .
+        git commit -m "Copycat changes"
+    else
+        echo "No changes to commit."
+    fi
+}
+
 # Function to process each repository
 function process_repo() {
     local repo_name=$1
@@ -52,18 +77,12 @@ function process_repo() {
     if [ -d "../$repo_name" ]; then
         echo "${BLUE} 😸 Copying to $repo_name ... ${NC}"
         cd ../$repo_name
-        # Reset repository to main branch
-        git checkout . >/dev/null 2>&1
-        git checkout main >/dev/null 2>&1
-        git pull >/dev/null 2>&1
 
         # Commit changes only on success
-        if sh ../copycat/scripts/$selected_script.sh $options; then
-            git checkout -b $branch_name    #> /dev/null 2>&1
-            git add .                       #> /dev/null 2>&1
-            git commit -m "Copycat changes" #> /dev/null 2>&1
+        if sh ../copycat/scripts/$selected_script.sh "${options[@]}"; then
+            commit_changes
         else
-            echo "${RED} 😿 There was an error copying changes to $repo_name${NC}"
+            echo "${RED} 😿 There was an error copying changes to $repo_name ${NC}"
         fi
     else
         echo "${RED} 😿 Could not find repository $repo_name ${NC}"
@@ -76,6 +95,17 @@ read repo_choices
 # Convert choices into an array
 selected_repos=($repo_choices)
 
+# Loop through selected repositories and reset to main branch
+for index in "${selected_repos[@]}"; do
+    repo_name=${repos[$index - 1]}
+    cd ../$repo_name
+    git checkout main >/dev/null 2>&1
+    git pull >/dev/null 2>&1
+    git checkout -b $branch_name >/dev/null 2>&1
+done
+
+cd ../copycat
+
 while true; do
     # Get user input
     show_script_menu
@@ -85,10 +115,9 @@ while true; do
     selected_script=${scripts[$script_choice - 1]}
 
     show_options_menu
-    read options
 
     # Loop through selected repositories and apply changes
-    for index in $selected_repos; do
+    for index in "${selected_repos[@]}"; do
         repo_name=${repos[$index - 1]}
         process_repo $repo_name
     done
@@ -103,8 +132,12 @@ while true; do
     fi
 done
 
+cd ../copycat
+
 # Loop through selected repositories and push changes
-for index in $selected_repos; do
+for index in "${selected_repos[@]}"; do
+    repo_name=${repos[$index - 1]}
+    cd ../$repo_name
     git push origin $branch_name >/dev/null 2>&1
     echo "${GREEN} 😸 Changes copied to $repo_name. Open a pull request at https://github.com/saltpay/$repo_name/pull/new/$branch_name ${NC}"
 done

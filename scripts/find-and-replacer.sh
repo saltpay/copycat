@@ -1,12 +1,29 @@
 #!/bin/zsh
 set -e
 
+# ANSI color codes
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Finds all instances of a string within the repo and replaces it with another string
-# Usage: ./find-and-replacer.sh <string-to-find> <string-to-replace-with>
-# Example: ./find-and-replacer.sh "acquiring" "acceptance"
+# Initialize variables
+findString=""
+replaceString=""
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 -f <string-to-find> -r <string-to-replace-with>"
+    echo "Example: $0 -f \"old string\" -r \"new string\""
+    exit 1
+}
+
+# Parse command-line arguments
+while getopts 'f:r:' flag; do
+  case "${flag}" in
+    f) findString="${OPTARG}" ;;
+    r) replaceString="${OPTARG}" ;;
+    *) usage ;;
+  esac
+done
 
 # Assert that the script is being run from the root of the repository
 if [ ! -d ".git" ]; then
@@ -15,17 +32,31 @@ if [ ! -d ".git" ]; then
 fi
 
 # Assert that the user has provided the required arguments
-if [ -z "$1" ] || [ -z "$2" ]; then
+if [ -z "$findString" ] || [ -z "$replaceString" ]; then
     echo "${BLUE} 🦧 Please provide the string to find and the string to replace with ${NC}"
-    exit 1
+    usage
 fi
 
-# Assert that the string to find is not empty
-if [ -z "$1" ]; then
-    echo "${BLUE} 🦧 Please provide the string to find ${NC}"
-    exit 1
-fi
+echo "${BLUE} 🦧 Replacing $findString with $replaceString... ${NC}"
 
-echo "${BLUE}"
 # Do the find and replace
-find . -type f -not -path "./.git/*" -not -path "./.idea/*" -not -path "./.vscode/*" -not -path "./node_modules/*" -not -path "./mvn/*" -not -path "./certs/*" -exec sed -i '' -e "s/$1/$2/g" {} \;
+find . -type f \
+    -not -path "./.git/*" \
+    -not -path "./.idea/*" \
+    -not -path "./.vscode/*" \
+    -not -path "./node_modules/*" \
+    -not -path "./target/*" \
+    -not -path "./.mvn/*" \
+    -not -path "./certs/*" \
+    -not -name ".DS_Store" \
+    -not -name "*.jar" \
+    -not -name "*.class" \
+    -not -name "*.log" \
+    -not -name "*.tmp" \
+    -not -name "*.bak" \
+    -not -name "*.swp" \
+    -exec bash -c 'export LC_ALL=C; sed -i "" -e "s/$0/$1/g" "$2"' "$findString" "$replaceString" {} \;
+
+sh ../copycat/scripts/bump-helm-chart.sh || true
+
+echo "${BLUE} 🦧 Find and replace completed! ${NC}"

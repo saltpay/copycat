@@ -5,8 +5,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Assert that yq is installed
-if ! command -v yq &> /dev/null
-then
+if ! command -v yq &>/dev/null; then
     echo "${BLUE} 🦧 yq could not be found ${NC}"
     echo "${BLUE} 🦧 Please install yq using the instructions at https://mikefarah.gitbook.io/yq/#install ${NC}"
     exit 1
