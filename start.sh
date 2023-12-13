@@ -1,6 +1,13 @@
 #!/bin/zsh
 set -e
 
+#echo "setting offset based on shell version"
+if [[ -n ${ZSH_VERSION} ]] && [[ ! -z ${ZSH_VERSION} ]]; then
+  INDEX_OFFSET=0
+else
+  INDEX_OFFSET=1
+fi
+
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -97,7 +104,7 @@ selected_repos=($repo_choices)
 
 # Loop through selected repositories and reset to main branch
 for index in "${selected_repos[@]}"; do
-    repo_name=${repos[$index - 1]}
+    repo_name=${repos[$index - $INDEX_OFFSET]}
     cd ../$repo_name
     git checkout main >/dev/null 2>&1
     git pull >/dev/null 2>&1
@@ -112,7 +119,7 @@ while true; do
     echo "${BLUE} 😸 Choose an option: ${NC}"
     read script_choice
 
-    selected_script=${scripts[$script_choice - 1]}
+    selected_script=${scripts[$script_choice - $INDEX_OFFSET]}
 
     show_options_menu
 
