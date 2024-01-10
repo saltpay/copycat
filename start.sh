@@ -118,6 +118,10 @@ selected_repos=($repo_choices)
 for index in "${selected_repos[@]}"; do
     repo_name=${repos[$index - $INDEX_OFFSET]}
     cd ../$repo_name
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "${RED} 😿 There are uncommitted changes in $repo_name. Please commit or stash them before continuing. ${NC}"
+        exit 1
+    fi
     git checkout main >/dev/null 2>&1
     git pull >/dev/null 2>&1
     git checkout -b $branch_name >/dev/null 2>&1
