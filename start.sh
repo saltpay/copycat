@@ -17,7 +17,7 @@ branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
 # Declare target repositories and scripts
 repos=("acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "transaction-block-aux" "transaction-block-manager")
-scripts=("find-and-replacer" "yaml-changer")
+scripts=("find-and-replacer" "yaml-changer" "fetch-avro-schemas")
 
 # Function to display the change select menu
 function show_script_menu() {
@@ -52,6 +52,11 @@ function show_options_menu() {
         # Combining the inputs into options
         options=(-k "$key" -v "$value" -f "$filename")
         ;;
+    "fetch-avro-schemas")
+        # Used to remind the user to connect to the dev VPN
+        echo "${BLUE} 😸 Are you connected to the dev VPN? y/n ${NC}"
+        read -r vpn_choice
+        ;;
     *) 
         options=()
         ;;
@@ -68,10 +73,17 @@ function show_repo_menu() {
     done
 }
 
+# Prompts the user to choose a commit message for the changes
+function show_commit_message_menu() {
+    echo "${BLUE} 😸 Please enter a commit message: ${NC}"
+    read -r commit_message
+}
+
+# Function to commit changes
 function commit_changes() {
     if [ -n "$(git status --porcelain)" ]; then
         git add .
-        git commit -m "Copycat changes"
+        git commit -m "$commit_message - Copycat ©" 
     else
         echo "No changes to commit."
     fi
@@ -123,6 +135,8 @@ while true; do
 
     show_options_menu
 
+    show_commit_message_menu
+
     # Loop through selected repositories and apply changes
     for index in "${selected_repos[@]}"; do
         repo_name=${repos[$index - 1]}
@@ -149,4 +163,4 @@ for index in "${selected_repos[@]}"; do
     echo "${GREEN} 😸 Changes copied to $repo_name. Open a pull request at https://github.com/saltpay/$repo_name/pull/new/$branch_name ${NC}"
 done
 
-echo "${BLUE} 😸 Finished, thank you for using Copycat! ${NC}"
+echo "${BLUE} 😸 Finished, thank you for using Copycat ©! ${NC}"
