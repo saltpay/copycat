@@ -32,7 +32,7 @@ if [ ! -d ".git" ]; then
 fi
 
 # Assert that the user has provided the required arguments
-if [ -z "$findString" ] || [ -z "$replaceString" ]; then
+if [ -z "$findString" ]; then
     echo "${BLUE} 🦧 Please provide the string to find and the string to replace with ${NC}"
     usage
 fi
