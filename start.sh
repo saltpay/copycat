@@ -3,9 +3,9 @@ set -e
 
 #echo "setting offset based on shell version"
 if [[ -n ${ZSH_VERSION} ]] && [[ ! -z ${ZSH_VERSION} ]]; then
-  INDEX_OFFSET=0
+    INDEX_OFFSET=0
 else
-  INDEX_OFFSET=1
+    INDEX_OFFSET=1
 fi
 
 BLUE='\033[0;34m'
@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
 # Declare target repositories and scripts
-repos=("acceptance-fx-api" "acceptance-bin-service" "acquiring-payments-api" "payments-gateway-service" "payments-refunds-wrapper" "transaction-block-aux" "transaction-block-manager")
+repos=("acceptance-bin-service" "acceptance-fx-api" "acceptance-otlp-collector" "acceptance-quality-control" "acquiring-payments-api" "backstage-project-templates" "card-transaction-insights" "payments-gateway-service" "payments-refunds-wrapper" "transaction-block-aux" "transaction-block-manager")
 scripts=("find-and-replacer" "yaml-changer" "fetch-avro-schemas")
 
 # Function to display the change select menu
@@ -57,7 +57,7 @@ function show_options_menu() {
         echo "${BLUE} 😸 Are you connected to the dev VPN? y/n ${NC}"
         read -r vpn_choice
         ;;
-    *) 
+    *)
         options=()
         ;;
     esac
@@ -83,7 +83,7 @@ function show_commit_message_menu() {
 function commit_changes() {
     if [ -n "$(git status --porcelain)" ]; then
         git add .
-        git commit -m "$commit_message - Copycat ©" 
+        git commit -m "$commit_message - Copycat ©"
     else
         echo "No changes to commit."
     fi
