@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
 # Declare target repositories and scripts
-repos=("acceptance-bin-service" "acceptance-fx-api" "acceptance-otlp-collector" "acceptance-quality-control" "acquiring-payments-api" "backstage-project-templates" "card-transaction-insights" "payments-gateway-service" "payments-refunds-wrapper" "transaction-block-aux" "transaction-block-manager")
+repos=("acceptance-bin-service" "acceptance-fx-api" "acceptance-otlp-collector" "acceptance-quality-control" "acquiring-payments-api" "backstage-project-templates" "card-transaction-insights" "payments-gateway-service" "payments-refunds-wrapper" "test-java-service" "transaction-block-aux" "transaction-block-manager" "transaction-block-janitor")
 scripts=("find-and-replacer" "yaml-changer" "fetch-avro-schemas")
 
 # Function to display the change select menu
