@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -14,7 +15,16 @@ func main() {
 	projects := []string{
 		"acceptance-bin-service",
 		"acceptance-fx-api",
-		"acceptance-otlp-collector"}
+		"acceptance-otlp-collector",
+		"acceptance-quality-control",
+		"acquiring-payments-api",
+		"card-transaction-insights",
+		"payments-gateway-service",
+		"payments-refunds-wrapper",
+		"test-java-service",
+		"transaction-block-aux",
+		"transaction-block-manager",
+		"transaction-block-janitor"}
 
 	log.Println("Welcome to copycat 2 😸!")
 	log.Println("Please enter the project you want to copy changes to")
@@ -45,7 +55,7 @@ func main() {
 	}
 
 	log.Println("🚚 We're creating a new git branch.")
-	err = gitCreateNewBranch(targetDir)
+	branch, err := gitCreateNewBranch(targetDir)
 	if err != nil {
 		log.Println(err)
 		return
@@ -73,10 +83,12 @@ func main() {
 	}
 
 	log.Println("🚚 We're pushing the changes to a new git branch.")
-	err = pushGitChanges(targetDir)
+	err = pushGitChanges(targetDir, *branch)
 	if err != nil {
 		return
 	}
+
+	log.Println(fmt.Sprintf("😸 Changes copied to %s. Open a pull request at https://github.com/saltpay/%s/pull/new/%s", projects[i], projects[i], *branch))
 }
 
 func runMaven(targetDir string) error {
@@ -102,13 +114,13 @@ func runMaven(targetDir string) error {
 	return nil
 }
 
-func gitCreateNewBranch(targetDir string) error {
+func gitCreateNewBranch(targetDir string) (*string, error) {
 	cmd := exec.Command("git", "checkout", "main")
 	cmd.Dir = targetDir
 	_, err := cmd.Output()
 	if err != nil {
 		log.Println("Error running git checkout: ", err)
-		return err
+		return nil, err
 	}
 
 	cmd = exec.Command("git", "pull")
@@ -116,21 +128,23 @@ func gitCreateNewBranch(targetDir string) error {
 	_, err = cmd.Output()
 	if err != nil {
 		log.Println("Error running git pull: ", err)
-		return err
+		return nil, err
 	}
 
-	cmd = exec.Command("git", "checkout", "-b", "copycat")
+	branchName := "copycat-" + time.Now().Format("2006-01-02-15-04-05")
+
+	cmd = exec.Command("git", "checkout", "-b", branchName)
 	cmd.Dir = targetDir
 	_, err = cmd.Output()
 	if err != nil {
 		log.Println("Error creating copycat branch: ", err)
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &branchName, nil
 }
 
-func pushGitChanges(targetDir string) error {
+func pushGitChanges(targetDir string, branchName string) error {
 	cmd := exec.Command("git", "add", ".")
 	cmd.Dir = targetDir
 	_, err := cmd.Output()
@@ -140,6 +154,14 @@ func pushGitChanges(targetDir string) error {
 	}
 
 	cmd = exec.Command("git", "commit", "-m Copycat")
+	cmd.Dir = targetDir
+	_, err = cmd.Output()
+	if err != nil {
+		log.Println("Error running git commit: ", err)
+		return err
+	}
+
+	cmd = exec.Command("git", "push", "origin", branchName)
 	cmd.Dir = targetDir
 	_, err = cmd.Output()
 	if err != nil {
