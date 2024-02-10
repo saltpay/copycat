@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -41,11 +43,32 @@ func main() {
 		return
 	}
 
-	log.Println("🥳 Congrats mate, you picked", projects[i])
+	project := projects[i]
+
+	log.Println("🥳 Congrats mate, you picked", project)
 	log.Println()
 
+	log.Println("Please enter the change you want to apply")
+	log.Println()
+
+	recipes, err := getRecipes()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	for i, recipe := range recipes {
+		log.Println(" - ", i, " ", recipe.Name, " - ", recipe.DisplayName)
+	}
+	_, err = fmt.Scanf("%d", &i)
+	if err != nil {
+		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
+		return
+	}
+
+	recipe := recipes[i]
+
 	currentDir, _ := os.Getwd()
-	targetDir := strings.Replace(currentDir, "copycat", projects[i], -1)
+	targetDir := strings.Replace(currentDir, "copycat", project, -1)
 
 	log.Println("🚚 We're checking there are no uncommitted changes in the target project.")
 	err = validateNoGitChanges(targetDir)
@@ -69,7 +92,7 @@ func main() {
 	}
 
 	log.Println("🚚 We're applying the recipe to the target projects (this may take a while...).")
-	err = runMaven(targetDir)
+	err = runMaven(targetDir, recipe)
 	if err != nil {
 		log.Println(err)
 		return
@@ -88,16 +111,14 @@ func main() {
 		return
 	}
 
-	log.Println(fmt.Sprintf("😸 Changes copied to %s. Open a pull request at https://github.com/saltpay/%s/pull/new/%s", projects[i], projects[i], *branch))
+	log.Println(fmt.Sprintf("😸 Changes copied to %s. Open a pull request at https://github.com/saltpay/%s/pull/new/%s", project, project, *branch))
 }
 
-func runMaven(targetDir string) error {
+func runMaven(targetDir string, recipe recipe) error {
 	app := "./mvnw"
 	arg0 := "org.openrewrite.maven:rewrite-maven-plugin:run"
 	arg1 := "-Drewrite.recipeArtifactCoordinates=org.openrewrite.recipe:rewrite-spring:LATEST"
-
-	// TODO: user should be able to pick what recipe to run or maybe we can just read the rewrite.yml and run all of them?
-	arg2 := "-Drewrite.activeRecipes=com.teya.AddSpringPropertyExample"
+	arg2 := "-Drewrite.activeRecipes=" + recipe.Name
 
 	cmd := exec.Command(app, arg0, arg1, arg2)
 	cmd.Dir = targetDir
@@ -224,4 +245,36 @@ func deleteRewrite(targetDir string) error {
 		}
 	}
 	return nil
+}
+
+func getRecipes() ([]recipe, error) {
+	f, err := os.Open("rewrite.yml")
+	if err != nil {
+		return nil, err
+	}
+	decoder := yaml.NewDecoder(f)
+
+	var recipes []recipe
+	for {
+		spec := new(recipe)
+		err := decoder.Decode(&spec)
+		if spec == nil {
+			continue
+		}
+		// break loop on EOF
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		recipes = append(recipes, *spec)
+	}
+	return recipes, nil
+}
+
+type recipe struct {
+	Type        string `yaml:"type"`
+	Name        string `yaml:"name"`
+	DisplayName string `yaml:"displayName"`
 }
