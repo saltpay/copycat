@@ -3,11 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
+	"gopkg.in/yaml.v3"
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,22 +31,35 @@ func main() {
 
 	log.Println("Welcome to copycat 2 😸!")
 	log.Println("Please enter the project you want to copy changes to")
+	log.Println("You can pick multiple projects by separating them with a comma (e.g. 1,2,3)")
 
 	// List all projects
 	for i := 0; i < len(projects); i++ {
 		log.Println(" - ", i, " ", projects[i])
 	}
 
-	var i int
-	_, err := fmt.Scanf("%d", &i)
+	// instead of getting just one number, getting a list
+	var selectedProjects []string
+	var list string
+	// get indexes by separated by a comma
+	_, err := fmt.Scanf("%s", &list)
 	if err != nil {
 		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
 		return
 	}
+	// split the list by comma
+	indexesStr := strings.Split(list, ",")
+	// convert the string to int
+	for _, indexStr := range indexesStr {
+		index, err := strconv.Atoi(indexStr)
+		if err != nil {
+			fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
+			return
+		}
+		selectedProjects = append(selectedProjects, projects[index])
+	}
 
-	project := projects[i]
-
-	log.Println("🥳 Congrats mate, you picked", project)
+	log.Println("🥳 Congrats mate, you picked ", strings.Join(selectedProjects, ","))
 	log.Println()
 
 	log.Println("Please enter the change you want to apply")
@@ -56,6 +70,7 @@ func main() {
 		log.Println(err)
 		return
 	}
+	var i = 0
 	for i, recipe := range recipes {
 		log.Println(" - ", i, " ", recipe.Name, " - ", recipe.DisplayName)
 	}
@@ -67,51 +82,65 @@ func main() {
 
 	recipe := recipes[i]
 
+	for _, project := range selectedProjects {
+		log.Println("🌟Copying changes to ", project, "...")
+		err = runRecipe(project, recipe)
+		if err != nil {
+			log.Println("🚨 Error copying changes to ", project, ": ", err)
+			log.Println("🚨 Skipping to the next project...")
+		}
+		log.Println()
+	}
+
+}
+
+func runRecipe(project string, recipe recipe) error {
 	currentDir, _ := os.Getwd()
 	targetDir := strings.Replace(currentDir, "copycat", project, -1)
 
 	log.Println("🚚 We're checking there are no uncommitted changes in the target project.")
-	err = validateNoGitChanges(targetDir)
+	err := validateNoGitChanges(targetDir)
 	if err != nil {
 		log.Println(err)
-		return
+		return err
 	}
 
 	log.Println("🚚 We're creating a new git branch.")
 	branch, err := gitCreateNewBranch(targetDir)
 	if err != nil {
 		log.Println(err)
-		return
+		return err
 	}
 
 	log.Println("🚚 We're gonna copy rewrite.yaml to these projects.")
 	err = copyRewrite(targetDir)
 	if err != nil {
 		log.Println(err)
-		return
+		return err
 	}
 
 	log.Println("🚚 We're applying the recipe to the target projects (this may take a while...).")
 	err = runMaven(targetDir, recipe)
 	if err != nil {
 		log.Println(err)
-		return
+		return err
 	}
 
 	log.Println("🚚 We're deleting rewrite.yml from the target project.")
 	err = deleteRewrite(targetDir)
 	if err != nil {
 		log.Println(err)
-		return
+		return err
 	}
 
 	log.Println("🚚 We're pushing the changes to a new git branch.")
 	err = pushGitChanges(targetDir, *branch)
 	if err != nil {
-		return
+		return err
 	}
 
 	log.Println(fmt.Sprintf("😸 Changes copied to %s. Open a pull request at https://github.com/saltpay/%s/pull/new/%s", project, project, *branch))
+	return nil
 }
 
 func runMaven(targetDir string, recipe recipe) error {
@@ -270,6 +299,7 @@ func getRecipes() ([]recipe, error) {
 		}
 		recipes = append(recipes, *spec)
 	}
+
 	return recipes, nil
 }
 
