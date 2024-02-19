@@ -1,6 +1,7 @@
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: com.teya.SaltpayToTeya
+displayName: Change package name from com.saltpay to com.teya
 recipeList:
   - org.openrewrite.java.ChangePackage:
       oldPackageName: com.saltpay
@@ -8,22 +9,26 @@ recipeList:
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: com.teya.ChangeValueExample
-displayName: Change value example
+displayName: Example recipe to change a value in a yaml
 recipeList:
   - org.openrewrite.yaml.ChangeValue:
       oldKeyPath: .springdoc.api-docs.enabled
       value: false
 ---
 type: specs.openrewrite.org/v1beta/recipe
-name: com.teya.DeletePropertyExample
-displayName: Delete property example
+name: com.teya.UpdateDeprecatedProperties
+displayName: Update deprecated properties (management.tomcat)
 recipeList:
   - org.openrewrite.yaml.DeleteProperty:
       propertyKey: management.tomcat
+  - org.openrewrite.java.spring.AddSpringProperty:
+      property: server.shutdown
+      value: graceful
+      pathExpressions: ["**/application.yml"]
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: com.teya.AddSpringPropertyExample
-displayName: Merge YAML snippet example
+displayName: Enable virtual threads
 recipeList:
   - org.openrewrite.java.spring.AddSpringProperty:
       property: spring.threads.virtual.enabled

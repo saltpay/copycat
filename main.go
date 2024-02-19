@@ -3,8 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"gopkg.in/yaml.v3"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -28,6 +28,10 @@ func main() {
 		"transaction-block-aux",
 		"transaction-block-manager",
 		"transaction-block-janitor"}
+
+	defaultRecipes := []recipe{
+		{Type: "recipe", Name: "org.openrewrite.maven.UpdateMavenWrapper", DisplayName: "Update Maven Wrapper"},
+	}
 
 	log.Println("Welcome to copycat 2 😸!")
 	log.Println("Please enter the project you want to copy changes to")
@@ -70,6 +74,11 @@ func main() {
 		log.Println(err)
 		return
 	}
+	// append defaultRecipes to recipes
+	for _, defaultRecipe := range defaultRecipes {
+		recipes = append(recipes, defaultRecipe)
+	}
+
 	var i = 0
 	for i, recipe := range recipes {
 		log.Println(" - ", i, " ", recipe.Name, " - ", recipe.DisplayName)
@@ -153,6 +162,7 @@ func runMaven(targetDir string, recipe recipe) error {
 	cmd.Dir = targetDir
 	stdout, err := cmd.Output()
 	if err != nil {
+		log.Println("Error running maven: ", err)
 		err := deleteRewrite(targetDir)
 		if err != nil {
 			return err

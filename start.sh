@@ -17,7 +17,7 @@ branch_name="copycat-$(date +%Y-%m-%d)-$RANDOM"
 
 # Declare target repositories and scripts
 repos=("acceptance-bin-service" "acceptance-fx-api" "acceptance-otlp-collector" "acceptance-quality-control" "acquiring-payments-api" "backstage-project-templates" "card-transaction-insights" "payments-gateway-service" "payments-refunds-wrapper" "test-java-service" "transaction-block-aux" "transaction-block-manager" "transaction-block-janitor")
-scripts=("find-and-replacer" "yaml-changer" "fetch-avro-schemas")
+scripts=("find-and-replacer" "fetch-avro-schemas")
 
 # Function to display the change select menu
 function show_script_menu() {
@@ -40,17 +40,6 @@ function show_options_menu() {
 
         # Combining the inputs into options with flags
         options=(-f "$search_string" -r "$replacement_string")
-        ;;
-    "yaml-changer")
-        echo "${BLUE} 😸 Please enter the target yaml file path: ${NC}"
-        read -r filename
-        echo "${BLUE} 😸 Please enter the target yaml key: ${NC}"
-        read -r key
-        echo "${BLUE} 😸 Please enter the target value: ${NC}"
-        read -r value
-
-        # Combining the inputs into options
-        options=(-k "$key" -v "$value" -f "$filename")
         ;;
     "fetch-avro-schemas")
         # Used to remind the user to connect to the dev VPN
