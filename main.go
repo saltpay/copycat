@@ -27,7 +27,8 @@ func main() {
 		"test-java-service",
 		"transaction-block-aux",
 		"transaction-block-manager",
-		"transaction-block-janitor"}
+		"transaction-block-janitor",
+		"fake4-acquiring-host"}
 
 	defaultRecipes := []recipe{
 		{Type: "recipe", Name: "org.openrewrite.maven.UpdateMavenWrapper", DisplayName: "Update Maven Wrapper"},
