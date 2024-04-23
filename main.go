@@ -17,6 +17,7 @@ func main() {
 	// array of strings foo and bar
 	projects := []string{
 		"acceptance-bin-service",
+		"acceptance-aggregates-api",
 		"acceptance-fx-api",
 		"acceptance-otlp-collector",
 		"acceptance-quality-control",
@@ -24,7 +25,7 @@ func main() {
 		"card-transaction-insights",
 		"payments-gateway-service",
 		"payments-refunds-wrapper",
-		"test-java-service",
+		"demo-backend-service",
 		"transaction-block-aux",
 		"transaction-block-manager",
 		"transaction-block-janitor",
@@ -93,6 +94,16 @@ func main() {
 	recipe := recipes[i]
 
 	for _, project := range selectedProjects {
+		log.Println("🌟Validate target is clean ", project, "...")
+		err = validate(project, recipe)
+		if err != nil {
+			log.Println("🚨 Error validating ", project, ": ", err)
+			return
+		}
+		log.Println()
+	}
+
+	for _, project := range selectedProjects {
 		log.Println("🌟Copying changes to ", project, "...")
 		err = runRecipe(project, recipe)
 		if err != nil {
@@ -101,19 +112,30 @@ func main() {
 		}
 		log.Println()
 	}
+}
 
+func validate(project string, recipe recipe) error {
+	currentDir, _ := os.Getwd()
+	targetDir := strings.Replace(currentDir, "copycat", project, -1)
+
+	log.Println("🚚 We're checking there are no uncommitted changes in the target project...")
+	err := validateNoGitChanges(targetDir)
+	if err != nil {
+		return err
+	}
+
+	log.Println("🚚 We also check we are on main branch...")
+	err = validateWeAreOnMainBranch(targetDir)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func runRecipe(project string, recipe recipe) error {
 	currentDir, _ := os.Getwd()
 	targetDir := strings.Replace(currentDir, "copycat", project, -1)
-
-	log.Println("🚚 We're checking there are no uncommitted changes in the target project.")
-	err := validateNoGitChanges(targetDir)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
 
 	log.Println("🚚 We're creating a new git branch.")
 	branch, err := gitCreateNewBranch(targetDir)
@@ -230,6 +252,22 @@ func pushGitChanges(targetDir string, branchName string) error {
 		return err
 	}
 
+	return nil
+}
+
+func validateWeAreOnMainBranch(targetDir string) error {
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = targetDir
+	stdout, err := cmd.Output()
+	if err != nil {
+		log.Println("Error running git status: ", err)
+		return err
+	}
+
+	if strings.TrimSpace(string(stdout)) != "main" {
+		// return error message foo
+		return errors.New("🚨 Target project not on main branch.")
+	}
 	return nil
 }
 

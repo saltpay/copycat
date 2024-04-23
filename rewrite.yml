@@ -41,3 +41,11 @@ displayName: Organise imports
 recipeList:
   - org.openrewrite.java.OrderImports
   - org.openrewrite.java.RemoveUnusedImports
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.teya.TestDeletePropertyExample
+displayName: Test yaml delete property
+recipeList:
+  - org.openrewrite.yaml.DeleteProperty:
+      propertyKey: spec.template.metadata.annotations.foo
+      filePattern: '**/deployment.yaml'
