@@ -27,13 +27,11 @@ recipeList:
       pathExpressions: ["**/application.yml"]
 ---
 type: specs.openrewrite.org/v1beta/recipe
-name: com.teya.AddSpringPropertyExample
-displayName: Enable virtual threads
+name: com.teya.DeleteSpringPropertyExample
+displayName: Disable virtual threads
 recipeList:
-  - org.openrewrite.java.spring.AddSpringProperty:
-      property: spring.threads.virtual.enabled
-      value: true
-      pathExpressions: ["**/application.yml"]
+  - org.openrewrite.java.spring.DeleteSpringProperty:
+      propertyKey: spring.threads.virtual.enabled
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: com.teya.OrganiseImports

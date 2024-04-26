@@ -93,6 +93,14 @@ func main() {
 
 	recipe := recipes[i]
 
+	var commitMessage string
+	log.Println("And the commit message you want to use: ")
+	_, err = fmt.Scanf("%s", &commitMessage)
+	if err != nil {
+		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
+		return
+	}
+
 	for _, project := range selectedProjects {
 		log.Println("🌟Validate target is clean ", project, "...")
 		err = validate(project, recipe)
@@ -103,14 +111,25 @@ func main() {
 		log.Println()
 	}
 
+	mapOfProjectToURL := make(map[string]string)
 	for _, project := range selectedProjects {
 		log.Println("🌟Copying changes to ", project, "...")
-		err = runRecipe(project, recipe)
+		pullRequestURL, err := runRecipe(project, recipe, commitMessage)
+
 		if err != nil {
 			log.Println("🚨 Error copying changes to ", project, ": ", err)
 			log.Println("🚨 Skipping to the next project...")
+			mapOfProjectToURL[project] = "Error"
+		} else {
+			// add the url to the map
+			mapOfProjectToURL[project] = pullRequestURL
 		}
 		log.Println()
+	}
+
+	// Iterate map and print the url and project
+	for project, url := range mapOfProjectToURL {
+		log.Println("🌟 Pull request created for ", project, " at ", url)
 	}
 }
 
@@ -124,55 +143,56 @@ func validate(project string, recipe recipe) error {
 		return err
 	}
 
-	log.Println("🚚 We also check we are on main branch...")
-	err = validateWeAreOnMainBranch(targetDir)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
-func runRecipe(project string, recipe recipe) error {
+func runRecipe(project string, recipe recipe, commitMessage string) (string, error) {
 	currentDir, _ := os.Getwd()
 	targetDir := strings.Replace(currentDir, "copycat", project, -1)
+
+	log.Println("🚚 Switch to main branch...")
+	err := switchToMainBranch(targetDir)
+	if err != nil {
+		return "", err
+	}
 
 	log.Println("🚚 We're creating a new git branch.")
 	branch, err := gitCreateNewBranch(targetDir)
 	if err != nil {
 		log.Println(err)
-		return err
+		return "", err
 	}
 
 	log.Println("🚚 We're gonna copy rewrite.yaml to these projects.")
 	err = copyRewrite(targetDir)
 	if err != nil {
 		log.Println(err)
-		return err
+		return "", err
 	}
 
 	log.Println("🚚 We're applying the recipe to the target projects (this may take a while...).")
 	err = runMaven(targetDir, recipe)
 	if err != nil {
 		log.Println(err)
-		return err
+		return "", err
 	}
 
 	log.Println("🚚 We're deleting rewrite.yml from the target project.")
 	err = deleteRewrite(targetDir)
 	if err != nil {
 		log.Println(err)
-		return err
+		return "", err
 	}
 
 	log.Println("🚚 We're pushing the changes to a new git branch.")
-	err = pushGitChanges(targetDir, *branch)
+	err = pushGitChanges(targetDir, *branch, commitMessage)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	log.Println(fmt.Sprintf("😸 Changes copied to %s. Open a pull request at https://github.com/saltpay/%s/pull/new/%s", project, project, *branch))
-	return nil
+	pullRequestURL := fmt.Sprintf("https://github.com/saltpay/%s/pull/new/%s", project, *branch)
+
+	return pullRequestURL, nil
 }
 
 func runMaven(targetDir string, recipe recipe) error {
@@ -227,7 +247,7 @@ func gitCreateNewBranch(targetDir string) (*string, error) {
 	return &branchName, nil
 }
 
-func pushGitChanges(targetDir string, branchName string) error {
+func pushGitChanges(targetDir string, branchName string, commitMessage string) error {
 	cmd := exec.Command("git", "add", ".")
 	cmd.Dir = targetDir
 	_, err := cmd.Output()
@@ -236,7 +256,7 @@ func pushGitChanges(targetDir string, branchName string) error {
 		return err
 	}
 
-	cmd = exec.Command("git", "commit", "-m Copycat")
+	cmd = exec.Command("git", "commit", "-m "+commitMessage)
 	cmd.Dir = targetDir
 	_, err = cmd.Output()
 	if err != nil {
@@ -255,18 +275,13 @@ func pushGitChanges(targetDir string, branchName string) error {
 	return nil
 }
 
-func validateWeAreOnMainBranch(targetDir string) error {
-	cmd := exec.Command("git", "branch", "--show-current")
+func switchToMainBranch(targetDir string) error {
+	cmd := exec.Command("git", "switch", "main")
 	cmd.Dir = targetDir
-	stdout, err := cmd.Output()
+	_, err := cmd.Output()
 	if err != nil {
-		log.Println("Error running git status: ", err)
+		log.Println("🚨Error switching to main branch: ", err)
 		return err
-	}
-
-	if strings.TrimSpace(string(stdout)) != "main" {
-		// return error message foo
-		return errors.New("🚨 Target project not on main branch.")
 	}
 	return nil
 }
