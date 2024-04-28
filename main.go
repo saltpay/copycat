@@ -29,6 +29,7 @@ func main() {
 		"transaction-block-aux",
 		"transaction-block-manager",
 		"transaction-block-janitor",
+		"kafka-secure-proxy",
 		"fake4-acquiring-host"}
 
 	defaultRecipes := []recipe{
@@ -103,7 +104,7 @@ func main() {
 
 	for _, project := range selectedProjects {
 		log.Println("🌟Validate target is clean ", project, "...")
-		err = validate(project, recipe)
+		err = validate(project)
 		if err != nil {
 			log.Println("🚨 Error validating ", project, ": ", err)
 			return
@@ -127,13 +128,13 @@ func main() {
 		log.Println()
 	}
 
-	// Iterate map and print the url and project
+	log.Println("🐈 Copycat completed")
 	for project, url := range mapOfProjectToURL {
-		log.Println("🌟 Pull request created for ", project, " at ", url)
+		log.Println("🌟 Click the link to open pr for", project, "->", url)
 	}
 }
 
-func validate(project string, recipe recipe) error {
+func validate(project string) error {
 	currentDir, _ := os.Getwd()
 	targetDir := strings.Replace(currentDir, "copycat", project, -1)
 
@@ -152,6 +153,12 @@ func runRecipe(project string, recipe recipe, commitMessage string) (string, err
 
 	log.Println("🚚 Switch to main branch...")
 	err := switchToMainBranch(targetDir)
+	if err != nil {
+		return "", err
+	}
+
+	log.Println("🚚 Update main branch...")
+	err = updateMainBranch(targetDir)
 	if err != nil {
 		return "", err
 	}
@@ -281,6 +288,17 @@ func switchToMainBranch(targetDir string) error {
 	_, err := cmd.Output()
 	if err != nil {
 		log.Println("🚨Error switching to main branch: ", err)
+		return err
+	}
+	return nil
+}
+
+func updateMainBranch(targetDir string) error {
+	cmd := exec.Command("git", "pull")
+	cmd.Dir = targetDir
+	_, err := cmd.Output()
+	if err != nil {
+		log.Println("🚨Error updating main branch: ", err)
 		return err
 	}
 	return nil
