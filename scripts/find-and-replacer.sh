@@ -57,6 +57,6 @@ find . -type f \
     -not -name "*.swp" \
     -exec bash -c 'export LC_ALL=C; sed -i "" -e "s/$0/$1/g" "$2"' "$findString" "$replaceString" {} \;
 
-sh ../copycat/scripts/bump-helm-chart.sh || true
+#sh ../copycat/scripts/bump-helm-chart.sh || true
 
 echo "${BLUE} 🦧 Find and replace completed! ${NC}"
