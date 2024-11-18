@@ -1,6 +1,8 @@
 package main
 
 import (
+	"copycat/internal/pkg/actions"
+	"copycat/internal/pkg/recipes"
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
@@ -19,8 +21,9 @@ func main() {
 		"acceptance-bin-service",
 		"acceptance-aggregates-api",
 		"acceptance-fx-api",
-		"acceptance-otlp-collector",
+		"acceptance-fraud-engine",
 		"acceptance-quality-control",
+		"acceptance-otlp-collector",
 		"acquiring-payments-api",
 		"card-transaction-insights",
 		"payments-gateway-service",
@@ -28,12 +31,14 @@ func main() {
 		"demo-backend-service",
 		"transaction-block-aux",
 		"transaction-block-manager",
-		"transaction-block-janitor",
 		"kafka-secure-proxy",
+		"iso-8583-proxy",
 		"fake4-acquiring-host"}
 
-	defaultRecipes := []recipe{
+	defaultRecipes := []recipes.Recipe{
 		{Type: "recipe", Name: "org.openrewrite.maven.UpdateMavenWrapper", DisplayName: "Update Maven Wrapper"},
+		{Type: "action", Name: "search-replace-strings", DisplayName: "Search and replace string"},
+		{Type: "action", Name: "update-avro-schemas", DisplayName: "Update avro schemas"},
 	}
 
 	log.Println("Welcome to copycat 2 😸!")
@@ -66,25 +71,25 @@ func main() {
 		selectedProjects = append(selectedProjects, projects[index])
 	}
 
-	log.Println("🥳 Congrats mate, you picked ", strings.Join(selectedProjects, ","))
+	log.Println("🥳 Congrats, you picked ", strings.Join(selectedProjects, ","))
 	log.Println()
 
 	log.Println("Please enter the change you want to apply")
 	log.Println()
 
-	recipes, err := getRecipes()
+	allRecipes, err := getRecipes()
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	// append defaultRecipes to recipes
 	for _, defaultRecipe := range defaultRecipes {
-		recipes = append(recipes, defaultRecipe)
+		allRecipes = append(allRecipes, defaultRecipe)
 	}
 
 	var i = 0
-	for i, recipe := range recipes {
-		log.Println(" - ", i, " ", recipe.Name, " - ", recipe.DisplayName)
+	for i, recipe := range allRecipes {
+		log.Println(" - ", i, " - ", recipe.DisplayName)
 	}
 	_, err = fmt.Scanf("%d", &i)
 	if err != nil {
@@ -92,7 +97,7 @@ func main() {
 		return
 	}
 
-	recipe := recipes[i]
+	recipe := allRecipes[i]
 
 	var commitMessage string
 	log.Println("And the commit message you want to use: ")
@@ -147,7 +152,7 @@ func validate(project string) error {
 	return nil
 }
 
-func runRecipe(project string, recipe recipe, commitMessage string) (string, error) {
+func runRecipe(project string, recipe recipes.Recipe, commitMessage string) (string, error) {
 	currentDir, _ := os.Getwd()
 	targetDir := strings.Replace(currentDir, "copycat", project, -1)
 
@@ -170,25 +175,34 @@ func runRecipe(project string, recipe recipe, commitMessage string) (string, err
 		return "", err
 	}
 
-	log.Println("🚚 We're gonna copy rewrite.yaml to these projects.")
-	err = copyRewrite(targetDir)
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
+	if recipe.Type == "recipe" {
+		log.Println("🚚 We're gonna copy rewrite.yaml to these projects.")
+		err = copyRewrite(targetDir)
+		if err != nil {
+			log.Println(err)
+			return "", err
+		}
 
-	log.Println("🚚 We're applying the recipe to the target projects (this may take a while...).")
-	err = runMaven(targetDir, recipe)
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
+		log.Println("🚚 We're applying the recipe to the target projects (this may take a while...).")
+		err = runMaven(targetDir, recipe)
+		if err != nil {
+			log.Println(err)
+			return "", err
+		}
 
-	log.Println("🚚 We're deleting rewrite.yml from the target project.")
-	err = deleteRewrite(targetDir)
-	if err != nil {
-		log.Println(err)
-		return "", err
+		log.Println("🚚 We're deleting rewrite.yml from the target project.")
+		err = deleteRewrite(targetDir)
+		if err != nil {
+			log.Println(err)
+			return "", err
+		}
+	} else if recipe.Type == "action" {
+		log.Println("🚚 We're applying the recipe to the target projects (this may take a while...).")
+		err = runAction(targetDir, recipe)
+		if err != nil {
+			log.Println(err)
+			return "", err
+		}
 	}
 
 	log.Println("🚚 We're pushing the changes to a new git branch.")
@@ -202,7 +216,16 @@ func runRecipe(project string, recipe recipe, commitMessage string) (string, err
 	return pullRequestURL, nil
 }
 
-func runMaven(targetDir string, recipe recipe) error {
+func runAction(targetDir string, action recipes.Recipe) error {
+	log.Println("🚚 We're applying action=", action.Name, " on targetDir=", targetDir)
+
+	if action.Name == "search-replace-strings" {
+		return actions.RunSearchAndReplaceAction(targetDir)
+	}
+	return nil
+}
+
+func runMaven(targetDir string, recipe recipes.Recipe) error {
 	app := "./mvnw"
 	arg0 := "org.openrewrite.maven:rewrite-maven-plugin:run"
 	arg1 := "-Drewrite.recipeArtifactCoordinates=org.openrewrite.recipe:rewrite-spring:LATEST"
@@ -225,27 +248,11 @@ func runMaven(targetDir string, recipe recipe) error {
 }
 
 func gitCreateNewBranch(targetDir string) (*string, error) {
-	cmd := exec.Command("git", "checkout", "main")
-	cmd.Dir = targetDir
-	_, err := cmd.Output()
-	if err != nil {
-		log.Println("Error running git checkout: ", err)
-		return nil, err
-	}
-
-	cmd = exec.Command("git", "pull")
-	cmd.Dir = targetDir
-	_, err = cmd.Output()
-	if err != nil {
-		log.Println("Error running git pull: ", err)
-		return nil, err
-	}
-
 	branchName := "copycat-" + time.Now().Format("2006-01-02-15-04-05")
 
-	cmd = exec.Command("git", "checkout", "-b", branchName)
+	cmd := exec.Command("git", "checkout", "-b", branchName)
 	cmd.Dir = targetDir
-	_, err = cmd.Output()
+	_, err := cmd.Output()
 	if err != nil {
 		log.Println("Error creating copycat branch: ", err)
 		return nil, err
@@ -358,16 +365,16 @@ func deleteRewrite(targetDir string) error {
 	return nil
 }
 
-func getRecipes() ([]recipe, error) {
+func getRecipes() ([]recipes.Recipe, error) {
 	f, err := os.Open("rewrite.yml")
 	if err != nil {
 		return nil, err
 	}
 	decoder := yaml.NewDecoder(f)
 
-	var recipes []recipe
+	var allRecipes []recipes.Recipe
 	for {
-		spec := new(recipe)
+		spec := new(recipes.Recipe)
 		err := decoder.Decode(&spec)
 		if spec == nil {
 			continue
@@ -379,14 +386,8 @@ func getRecipes() ([]recipe, error) {
 		if err != nil {
 			return nil, err
 		}
-		recipes = append(recipes, *spec)
+		allRecipes = append(allRecipes, *spec)
 	}
 
-	return recipes, nil
-}
-
-type recipe struct {
-	Type        string `yaml:"type"`
-	Name        string `yaml:"name"`
-	DisplayName string `yaml:"displayName"`
+	return allRecipes, nil
 }
