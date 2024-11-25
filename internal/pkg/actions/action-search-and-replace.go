@@ -1,7 +1,7 @@
 package actions
 
 import (
-	"fmt"
+	"bufio"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,23 +12,18 @@ import (
 func RunSearchAndReplaceAction(targetDir string) error {
 	log.Println("🚚 We're applying action=search-replace-strings on targetDir=", targetDir)
 
-	var searchString string
-	log.Println("⚠️ Enter string to search and replace: ")
-	_, err := fmt.Scanf("%s", &searchString)
-	if err != nil {
-		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
-		return err
-	}
-	var replacementString string
+	log.Println("⚠️ Enter string to replace: ")
+	in := bufio.NewReader(os.Stdin)
+	userInput, _ := in.ReadString('\n')
+	searchString := strings.TrimSpace(userInput)
+
 	log.Println("⚠️ Enter string to use as replacement: ")
-	_, err = fmt.Scanf("%s", &replacementString)
-	if err != nil {
-		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
-		return err
-	}
+	in = bufio.NewReader(os.Stdin)
+	userInput, _ = in.ReadString('\n')
+	replacementString := strings.TrimSpace(userInput)
 
 	// iterate all the files in the targetDir
-	err = filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(targetDir, func(path string, info os.FileInfo, err error) error {
 		log.Println("Processing file ", path, "...")
 
 		// Skip directories

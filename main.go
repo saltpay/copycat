@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"copycat/internal/pkg/actions"
 	"copycat/internal/pkg/recipes"
 	"errors"
@@ -43,24 +44,21 @@ func main() {
 
 	log.Println("Welcome to copycat 2 😸!")
 	log.Println("Please enter the project you want to copy changes to")
-	log.Println("You can pick multiple projects by separating them with a comma (e.g. 1,2,3)")
+	log.Println("You can pick multiple projects by separating them with a space (e.g. 1 2 3)")
 
 	// List all projects
 	for i := 0; i < len(projects); i++ {
 		log.Println(" - ", i, " ", projects[i])
 	}
 
-	// instead of getting just one number, getting a list
+	// Ask user to select projects
+	in := bufio.NewReader(os.Stdin)
+	userInput, _ := in.ReadString('\n')
+	userInput = strings.TrimSpace(userInput)
+
+	// split the user input by spaces
 	var selectedProjects []string
-	var list string
-	// get indexes by separated by a comma
-	_, err := fmt.Scanf("%s", &list)
-	if err != nil {
-		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
-		return
-	}
-	// split the list by comma
-	indexesStr := strings.Split(list, ",")
+	indexesStr := strings.Split(userInput, " ")
 	// convert the string to int
 	for _, indexStr := range indexesStr {
 		index, err := strconv.Atoi(indexStr)
@@ -87,25 +85,20 @@ func main() {
 		allRecipes = append(allRecipes, defaultRecipe)
 	}
 
-	var i = 0
-	for i, recipe := range allRecipes {
-		log.Println(" - ", i, " - ", recipe.DisplayName)
+	for index, recipe := range allRecipes {
+		log.Println(" - ", index, " - ", recipe.DisplayName)
 	}
-	_, err = fmt.Scanf("%d", &i)
-	if err != nil {
-		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
-		return
-	}
-
+	// Ask user to select projects
+	in = bufio.NewReader(os.Stdin)
+	userInput, _ = in.ReadString('\n')
+	userInput = strings.TrimSpace(userInput)
+	i, _ := strconv.Atoi(userInput)
 	recipe := allRecipes[i]
 
-	var commitMessage string
-	log.Println("And the commit message you want to use: ")
-	_, err = fmt.Scanf("%s", &commitMessage)
-	if err != nil {
-		fmt.Println("(╯°□°)╯︵ ┻━┻ ", err)
-		return
-	}
+	log.Println("Enter commit message: ")
+	in = bufio.NewReader(os.Stdin)
+	userInput, _ = in.ReadString('\n')
+	commitMessage := strings.TrimSpace(userInput)
 
 	for _, project := range selectedProjects {
 		log.Println("🌟Validate target is clean ", project, "...")
@@ -123,7 +116,7 @@ func main() {
 		pullRequestURL, err := runRecipe(project, recipe, commitMessage)
 
 		if err != nil {
-			log.Println("🚨 Error copying changes to ", project, ": ", err)
+			log.Println("🚨 Error applyings changes to ", project, ": ", err)
 			log.Println("🚨 Skipping to the next project...")
 			mapOfProjectToURL[project] = "Error"
 		} else {
@@ -305,7 +298,7 @@ func updateMainBranch(targetDir string) error {
 	cmd.Dir = targetDir
 	_, err := cmd.Output()
 	if err != nil {
-		log.Println("🚨Error updating main branch: ", err)
+		log.Println("🚨 Error updating main branch: ", err)
 		return err
 	}
 	return nil
