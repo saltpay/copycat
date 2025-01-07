@@ -196,11 +196,14 @@ func runRecipe(project string, recipe recipes.Recipe, commitMessage string) (str
 			log.Println(err)
 			return "", err
 		}
+	} else {
+		return "", errors.New("🚨 Invalid recipe type, type=" + recipe.Type)
 	}
 
 	log.Println("🚚 We're pushing the changes to a new git branch.")
 	err = pushGitChanges(targetDir, *branch, commitMessage)
 	if err != nil {
+		log.Println(err)
 		return "", err
 	}
 
@@ -219,6 +222,8 @@ func runAction(targetDir string, action recipes.Recipe) error {
 }
 
 func runMaven(targetDir string, recipe recipes.Recipe) error {
+	log.Println("🧑‍🍳 Applying recipe=", recipe.Name, " on targetDir=", targetDir)
+
 	app := "./mvnw"
 	arg0 := "org.openrewrite.maven:rewrite-maven-plugin:run"
 	arg1 := "-Drewrite.recipeArtifactCoordinates=org.openrewrite.recipe:rewrite-spring:LATEST"
@@ -275,7 +280,7 @@ func pushGitChanges(targetDir string, branchName string, commitMessage string) e
 	cmd.Dir = targetDir
 	_, err = cmd.Output()
 	if err != nil {
-		log.Println("Error running git commit: ", err)
+		log.Println("Error running git push: ", err)
 		return err
 	}
 
@@ -379,6 +384,10 @@ func getRecipes() ([]recipes.Recipe, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// TODO: try to simplify this types part. We're mixing our types "recipe' and 'action" with openrewrite type
+		spec.Type = "recipe"
+
 		allRecipes = append(allRecipes, *spec)
 	}
 
