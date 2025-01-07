@@ -32,6 +32,7 @@ func main() {
 		"demo-backend-service",
 		"transaction-block-aux",
 		"transaction-block-manager",
+		"salt-tokenisation-service",
 		"kafka-secure-proxy",
 		"iso-8583-proxy",
 		"fake4-acquiring-host"}
