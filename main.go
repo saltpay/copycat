@@ -17,28 +17,43 @@ type Project struct {
 }
 
 func main() {
+	// Clean up repos directory at startup
+	reposDir := "repos"
+	if _, err := os.Stat(reposDir); err == nil {
+		fmt.Println("Cleaning up existing repos directory...")
+		if err := os.RemoveAll(reposDir); err != nil {
+			log.Printf("Warning: Failed to clean repos directory: %v", err)
+		} else {
+			fmt.Println("✓ Repos directory cleaned")
+		}
+	}
+
 	projects := []Project{
-		{Repo: "acceptance-fee-service"},
-		{Repo: "acceptance-fraud-engine"},
-		{Repo: "acceptance-fx-api"},
-		{Repo: "ecom-transaction-payments"},
-		{Repo: "card-transaction-insights"},
-		{Repo: "ecom-callback-gateway"},
-		{Repo: "payments-refunds-wrapper"},
-		{Repo: "kafka-secure-proxy"},
-		{Repo: "consent-orchestrator-gateway"},
-		{Repo: "acceptance-tap-onboarding"},
-		{Repo: "teya-laime-helper"},
-		{Repo: "gmd-crm-sync"},
-		{Repo: "transaction-block-manager"},
-		{Repo: "pricing-app-backend"},
 		{Repo: "acceptance-aggregates-api"},
+		{Repo: "acceptance-fee-service"},
+		{Repo: "acceptance-fx-api"},
+		{Repo: "acceptance-fraud-engine"},
+		{Repo: "acceptance-tap-onboarding"},
+		{Repo: "acquiring-payments-api"},
+		{Repo: "basket-data-service"},
+		{Repo: "card-transaction-insights"},
 		{Repo: "commshub-sender-service"},
-		{Repo: "iso-8583-proxy"},
-		{Repo: "ecom-checkout-backend"},
-		{Repo: "pricing-engine-service"},
+		{Repo: "consent-orchestrator-gateway"},
+		{Repo: "ecom-transaction-payments"},
+		{Repo: "ecom-callback-gateway"},
 		{Repo: "ecom-checkout-generator"},
+		{Repo: "ecom-checkout-backend"},
 		{Repo: "fake4-acquiring-host"},
+		{Repo: "gmd-crm-sync"},
+		{Repo: "iso-8583-proxy"},
+		{Repo: "kafka-secure-proxy"},
+		{Repo: "payments-refunds-wrapper"},
+		{Repo: "payments-gateway-service"},
+		{Repo: "pricing-engine-service"},
+		{Repo: "pricing-app-backend"},
+		{Repo: "salt-tokenization-service"},
+		{Repo: "teya-laime-helper"},
+		{Repo: "transaction-block-manager"},
 	}
 
 	fmt.Println("Project Selector")
@@ -221,22 +236,6 @@ func performChangesLocally(selectedProjects []Project) {
 	branchName := fmt.Sprintf("copycat-%s", timestamp)
 	fmt.Printf("\nUsing branch name: %s\n", branchName)
 
-	// Ask for the Claude prompt
-	fmt.Println("\nPlease enter the prompt for Claude CLI to execute on each repository:")
-	promptInput := promptui.Prompt{
-		Label: "Prompt",
-	}
-
-	claudePrompt, err := promptInput.Run()
-	if err != nil {
-		log.Fatal("Failed to get prompt:", err)
-	}
-
-	if strings.TrimSpace(claudePrompt) == "" {
-		fmt.Println("No prompt provided. Exiting.")
-		return
-	}
-
 	// Ask for PR title and description
 	fmt.Println("\nPlease enter the PR title:")
 	titlePrompt := promptui.Prompt{
@@ -261,6 +260,22 @@ func performChangesLocally(selectedProjects []Project) {
 	prDescription, err := descPrompt.Run()
 	if err != nil {
 		log.Fatal("Failed to get PR description:", err)
+	}
+
+	// Ask for the Claude prompt
+	fmt.Println("\nPlease enter the prompt for Claude CLI to execute on each repository:")
+	promptInput := promptui.Prompt{
+		Label: "Prompt",
+	}
+
+	claudePrompt, err := promptInput.Run()
+	if err != nil {
+		log.Fatal("Failed to get prompt:", err)
+	}
+
+	if strings.TrimSpace(claudePrompt) == "" {
+		fmt.Println("No prompt provided. Exiting.")
+		return
 	}
 
 	// Execute Claude CLI and create PRs on each repository
@@ -295,6 +310,14 @@ func performChangesLocally(selectedProjects []Project) {
 		}
 
 		// Run claude CLI in the repository directory
+		fmt.Printf("\n⚠️  ATTENTION: Press ENTER to execute Claude CLI\n")
+		fmt.Printf("   Claude will open and apply the changes interactively.\n")
+		fmt.Printf("   When you're satisfied with the changes:\n")
+		fmt.Printf("   - Type 'exit' or 'quit' in Claude to continue\n")
+		fmt.Printf("   - The process will then create a branch and pull request\n")
+		fmt.Printf("\nPress ENTER to continue...")
+		fmt.Scanln() // Wait for user to press enter
+
 		fmt.Printf("Running Claude CLI...\n")
 		cmd = exec.Command("claude", claudePrompt)
 		cmd.Dir = targetPath
@@ -368,9 +391,22 @@ func performChangesLocally(selectedProjects []Project) {
 
 		fmt.Printf("✓ Successfully created PR for %s\n", project.Repo)
 		fmt.Printf("PR URL: %s", string(output))
+
+		// Clean up the cloned repository
+		fmt.Printf("Cleaning up %s...\n", targetPath)
+		if err := os.RemoveAll(targetPath); err != nil {
+			log.Printf("Warning: Failed to remove %s: %v", targetPath, err)
+		} else {
+			fmt.Printf("✓ Cleaned up %s\n", targetPath)
+		}
 	}
 
 	fmt.Println("\nAll repositories have been processed.")
+
+	// Final cleanup - remove the repos directory if it's empty
+	if err := os.Remove(reposDir); err == nil {
+		fmt.Println("✓ Removed empty repos directory")
+	}
 }
 
 func createGitHubIssueWithCLI(project Project, title string, description string) error {
