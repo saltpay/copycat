@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +18,7 @@ type Project struct {
 
 func main() {
 	projects := []Project{
+		{Repo: "acceptance-fee-service"},
 		{Repo: "acceptance-fraud-engine"},
 		{Repo: "acceptance-fx-api"},
 		{Repo: "ecom-transaction-payments"},
@@ -73,6 +72,9 @@ func main() {
 
 	switch result {
 	case "Create GitHub Issues":
+		fmt.Println("\n⚠️  WARNING: The Copilot agent does not sign commits.")
+		fmt.Println("You will need to fix unsigned commits before merging any pull request.")
+		fmt.Println("")
 		createGitHubIssues(selectedProjects)
 	case "Perform Changes Locally":
 		performChangesLocally(selectedProjects)
@@ -166,15 +168,16 @@ func createGitHubIssues(selectedProjects []Project) {
 		return
 	}
 
-	fmt.Println("\nOpening GitHub issue creation pages in your browser...")
-	fmt.Println("Please log in to GitHub if needed and submit the issues.")
+	fmt.Println("\nCreating GitHub issues using GitHub CLI...")
+	fmt.Println("Please make sure you are authenticated with 'gh auth login' if needed.")
 
 	for _, project := range selectedProjects {
-		err := openGitHubIssueInBrowser(project, issueTitle, issueDescription)
+		fmt.Printf("\nCreating issue for %s...\n", project.Repo)
+		err := createGitHubIssueWithCLI(project, issueTitle, issueDescription)
 		if err != nil {
-			log.Printf("Failed to open issue page for %s: %v", project.Repo, err)
+			log.Printf("Failed to create issue for %s: %v", project.Repo, err)
 		} else {
-			fmt.Printf("✓ Opened issue page for %s\n", project.Repo)
+			fmt.Printf("✓ Successfully created issue for %s\n", project.Repo)
 		}
 	}
 }
@@ -370,32 +373,20 @@ func performChangesLocally(selectedProjects []Project) {
 	fmt.Println("\nAll repositories have been processed.")
 }
 
-func openGitHubIssueInBrowser(project Project, title string, description string) error {
-	// URL encode the parameters
-	encodedTitle := url.QueryEscape(title)
-	body := url.QueryEscape(description)
-	assignees := url.QueryEscape("copilot")
+func createGitHubIssueWithCLI(project Project, title string, description string) error {
+	// Use GitHub CLI to create the issue
+	cmd := exec.Command("gh", "issue", "create",
+		"--repo", fmt.Sprintf("saltpay/%s", project.Repo),
+		"--title", title,
+		"--body", description,
+		"--assignee", "@copilot")
 
-	// Construct the GitHub issue creation URL with assignee
-	issueURL := fmt.Sprintf("https://github.com/saltpay/%s/issues/new?title=%s&body=%s&assignees=%s", project.Repo, encodedTitle, body, assignees)
-
-	// Open the URL in the default browser
-	return openBrowser(issueURL)
-}
-
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create issue: %v\nOutput: %s", err, string(output))
 	}
 
-	return cmd.Start()
+	// The gh command outputs the URL of the created issue
+	fmt.Printf("Created issue: %s", string(output))
+	return nil
 }
