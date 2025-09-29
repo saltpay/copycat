@@ -33,6 +33,7 @@ func main() {
 		{Repo: "acceptance-fee-service"},
 		{Repo: "acceptance-fx-api"},
 		{Repo: "acceptance-fraud-engine"},
+		{Repo: "acceptance-otlp-collector"},
 		{Repo: "acceptance-tap-onboarding"},
 		{Repo: "acquiring-payments-api"},
 		{Repo: "basket-data-service"},
@@ -52,6 +53,7 @@ func main() {
 		{Repo: "pricing-engine-service"},
 		{Repo: "pricing-app-backend"},
 		{Repo: "salt-tokenization-service"},
+		{Repo: "sample-backend-service"},
 		{Repo: "teya-laime-helper"},
 		{Repo: "transaction-block-manager"},
 	}
@@ -236,7 +238,7 @@ func performChangesLocally(selectedProjects []Project) {
 	branchName := fmt.Sprintf("copycat-%s", timestamp)
 	fmt.Printf("\nUsing branch name: %s\n", branchName)
 
-	// Ask for PR title and description
+	// Ask for PR title only
 	fmt.Println("\nPlease enter the PR title:")
 	titlePrompt := promptui.Prompt{
 		Label: "PR Title",
@@ -250,16 +252,6 @@ func performChangesLocally(selectedProjects []Project) {
 	if strings.TrimSpace(prTitle) == "" {
 		fmt.Println("No PR title provided. Exiting.")
 		return
-	}
-
-	fmt.Println("\nPlease enter the PR description:")
-	descPrompt := promptui.Prompt{
-		Label: "PR Description",
-	}
-
-	prDescription, err := descPrompt.Run()
-	if err != nil {
-		log.Fatal("Failed to get PR description:", err)
 	}
 
 	// Ask for the Claude prompt
@@ -309,26 +301,59 @@ func performChangesLocally(selectedProjects []Project) {
 			}
 		}
 
-		// Run claude CLI in the repository directory
-		fmt.Printf("\n⚠️  ATTENTION: Press ENTER to execute Claude CLI\n")
-		fmt.Printf("   Claude will open and apply the changes interactively.\n")
-		fmt.Printf("   When you're satisfied with the changes:\n")
-		fmt.Printf("   - Type 'exit' or 'quit' in Claude to continue\n")
-		fmt.Printf("   - The process will then create a branch and pull request\n")
-		fmt.Printf("\nPress ENTER to continue...")
-		fmt.Scanln() // Wait for user to press enter
-
-		fmt.Printf("Running Claude CLI...\n")
-		cmd = exec.Command("claude", claudePrompt)
+		// Run claude CLI in non-interactive mode to capture output
+		fmt.Printf("Running Claude CLI to analyze and apply changes...\n")
+		cmd = exec.Command("claude", "--print", claudePrompt)
 		cmd.Dir = targetPath
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
 
-		err = cmd.Run()
+		claudeOutput, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("Failed to run Claude CLI on %s: %v", project.Repo, err)
+			log.Printf("Failed to run Claude CLI on %s: %v\nOutput: %s", project.Repo, err, string(claudeOutput))
 			continue
+		}
+
+		// Use Claude's output as PR description
+		prDescription := string(claudeOutput)
+		if len(prDescription) > 2000 {
+			// GitHub has a limit on PR description length, truncate if needed
+			prDescription = prDescription[:1997] + "..."
+		}
+
+		fmt.Printf("Claude completed the changes.\n")
+
+		// Show the proposed PR description and ask for confirmation
+		fmt.Println("\n════════════════════════════════════════")
+		fmt.Println("Proposed PR Description (from Claude):")
+		fmt.Println("════════════════════════════════════════")
+		fmt.Println(prDescription)
+		fmt.Println("════════════════════════════════════════")
+
+		// Ask user if they want to edit the description
+		editPrompt := promptui.Select{
+			Label: "Do you want to edit the PR description?",
+			Items: []string{"Use as is", "Edit description"},
+		}
+
+		choice, _, err := editPrompt.Run()
+		if err != nil {
+			log.Printf("Failed to get user choice: %v", err)
+			continue
+		}
+
+		switch choice {
+		case 0: // Use as is
+			// Continue with the current description
+		case 1: // Edit description
+			descPrompt := promptui.Prompt{
+				Label:   "PR Description",
+				Default: prDescription,
+			}
+
+			prDescription, err = descPrompt.Run()
+			if err != nil {
+				log.Printf("Failed to get PR description: %v", err)
+				continue
+			}
 		}
 
 		// Check if there are changes to commit
