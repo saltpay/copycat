@@ -1,0 +1,55 @@
+projects:
+  - repo: acceptance-aggregates-api
+    slack_room: "#team-papi"
+  - repo: acceptance-fee-service
+    slack_room: "#team-papi"
+  - repo: acceptance-fx-api
+    slack_room: "#team-papi"
+  - repo: acceptance-fraud-engine
+    slack_room: "#team-papi"
+  - repo: acceptance-otlp-collector
+    slack_room: "#team-papi"
+  - repo: acceptance-tap-onboarding
+    slack_room: "#team-papi"
+  - repo: acquiring-payments-api
+    slack_room: "#team-papi"
+  - repo: basket-data-service
+    slack_room: "#team-papi"
+  - repo: card-transaction-insights
+    slack_room: "#team-papi"
+  - repo: commshub-sender-service
+    slack_room: "#team-papi"
+  - repo: consent-orchestrator-gateway
+    slack_room: "#team-papi"
+  - repo: ecom-transaction-payments
+    slack_room: "#team-papi"
+  - repo: ecom-callback-gateway
+    slack_room: "#team-papi"
+  - repo: ecom-checkout-generator
+    slack_room: "#team-papi"
+  - repo: ecom-checkout-backend
+    slack_room: "#team-papi"
+  - repo: fake4-acquiring-host
+    slack_room: "#team-papi"
+  - repo: gmd-crm-sync
+    slack_room: "#team-papi"
+  - repo: iso-8583-proxy
+    slack_room: "#team-papi"
+  - repo: kafka-secure-proxy
+    slack_room: "#team-papi"
+  - repo: payments-refunds-wrapper
+    slack_room: "#team-papi"
+  - repo: payments-gateway-service
+    slack_room: "#team-papi"
+  - repo: pricing-engine-service
+    slack_room: "#team-papi"
+  - repo: pricing-app-backend
+    slack_room: "#team-papi"
+  - repo: salt-tokenization-service
+    slack_room: "#team-papi"
+  - repo: sample-backend-service
+    slack_room: "#team-papi"
+  - repo: teya-laime-helper
+    slack_room: "#team-papi"
+  - repo: transaction-block-manager
+    slack_room: "#team-papi"

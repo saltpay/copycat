@@ -10,10 +10,31 @@ import (
 	"time"
 
 	"github.com/manifoldco/promptui"
+	"gopkg.in/yaml.v3"
 )
 
 type Project struct {
-	Repo string
+	Repo      string `yaml:"repo"`
+	SlackRoom string `yaml:"slack_room"`
+}
+
+type ProjectConfig struct {
+	Projects []Project `yaml:"projects"`
+}
+
+func loadProjects(filename string) ([]Project, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", filename, err)
+	}
+
+	var config ProjectConfig
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	return config.Projects, nil
 }
 
 func main() {
@@ -28,34 +49,9 @@ func main() {
 		}
 	}
 
-	projects := []Project{
-		{Repo: "acceptance-aggregates-api"},
-		{Repo: "acceptance-fee-service"},
-		{Repo: "acceptance-fx-api"},
-		{Repo: "acceptance-fraud-engine"},
-		{Repo: "acceptance-otlp-collector"},
-		{Repo: "acceptance-tap-onboarding"},
-		{Repo: "acquiring-payments-api"},
-		{Repo: "basket-data-service"},
-		{Repo: "card-transaction-insights"},
-		{Repo: "commshub-sender-service"},
-		{Repo: "consent-orchestrator-gateway"},
-		{Repo: "ecom-transaction-payments"},
-		{Repo: "ecom-callback-gateway"},
-		{Repo: "ecom-checkout-generator"},
-		{Repo: "ecom-checkout-backend"},
-		{Repo: "fake4-acquiring-host"},
-		{Repo: "gmd-crm-sync"},
-		{Repo: "iso-8583-proxy"},
-		{Repo: "kafka-secure-proxy"},
-		{Repo: "payments-refunds-wrapper"},
-		{Repo: "payments-gateway-service"},
-		{Repo: "pricing-engine-service"},
-		{Repo: "pricing-app-backend"},
-		{Repo: "salt-tokenization-service"},
-		{Repo: "sample-backend-service"},
-		{Repo: "teya-laime-helper"},
-		{Repo: "transaction-block-manager"},
+	projects, err := loadProjects("projects.yaml")
+	if err != nil {
+		log.Fatal("Failed to load projects:", err)
 	}
 
 	fmt.Println("Project Selector")
