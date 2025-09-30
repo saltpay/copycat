@@ -3,7 +3,6 @@ projects:
     slack_room: "#acceptance-papi"
   - repo: acceptance-bin-service
     slack_room: "#acceptance-papi"
-    slack_room: "#team-papi"
   - repo: acceptance-fee-service
     slack_room: "#acceptance-papi"
   - repo: acceptance-fx-api
