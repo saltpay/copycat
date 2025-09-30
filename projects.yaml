@@ -1,6 +1,8 @@
 projects:
   - repo: acceptance-aggregates-api
     slack_room: "#team-papi"
+  - repo: acceptance-bin-service
+    slack_room: "#team-papi"
   - repo: acceptance-fee-service
     slack_room: "#team-papi"
   - repo: acceptance-fx-api
