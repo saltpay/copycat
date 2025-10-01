@@ -1,4 +1,6 @@
 projects:
+  - repo: acceptance-quality-control
+    slack_room: "#spam"
   - repo: acceptance-aggregates-api
     slack_room: "#acceptance-papi"
   - repo: acceptance-bin-service
