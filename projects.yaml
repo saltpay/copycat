@@ -57,3 +57,25 @@ projects:
     slack_room: "#acceptance-papi"
   - repo: transaction-block-manager
     slack_room: "#acceptance-papi"
+  - repo: payment-acquiring-host
+    slack_room: "#about-host-enablement"
+  - repo: payment-acquiring-sandbox
+    slack_room: "#about-host-enablement"
+  - repo: acquiring-solanteq-solar
+    slack_room: "#about-host-enablement"
+  - repo: host-transaction-handler
+    slack_room: "#about-host-enablement"
+  - repo: he-solar-events
+    slack_room: "#about-host-enablement"
+  - repo: he-solar-proxy
+    slack_room: "#about-host-enablement"
+  - repo: he-way4-proxy
+    slack_room: "#about-host-enablement"
+  - repo: acquiring-way4-portal
+    slack_room: "#about-host-enablement"
+  - repo: acquiring-way4-gateway
+    slack_room: "#about-host-enablement"
+  - repo: he-merchant-mapping
+    slack_room: "#about-host-enablement"
+  - repo: techops-charge-api
+    slack_room: "#about-host-enablement"
