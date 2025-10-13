@@ -81,5 +81,5 @@ projects:
     slack_room: "#about-host-enablement"
   - repo: techops-way4-exporter
     slack_room: "#about-host-enablement"
-  - repo: card-transction-insights
+  - repo: card-transaction-insights
     slack_room: "#acceptance-papi"
