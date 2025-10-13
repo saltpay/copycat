@@ -299,7 +299,7 @@ func performChangesLocally(selectedProjects []Project) {
 
 		// Run claude CLI in non-interactive mode to capture output
 		fmt.Printf("Running Claude CLI to analyze and apply changes...\n")
-		cmd = exec.Command("claude", "--print", claudePrompt)
+		cmd = exec.Command("claude", "--permission-mode", "acceptEdits", claudePrompt)
 		cmd.Dir = targetPath
 
 		claudeOutput, err := cmd.CombinedOutput()
@@ -396,12 +396,23 @@ func performChangesLocally(selectedProjects []Project) {
 			continue
 		}
 
+		// Get the default branch for this repository
+		cmd = exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short")
+		cmd.Dir = targetPath
+		defaultBranchOutput, err := cmd.CombinedOutput()
+		if err != nil {
+			log.Printf("Failed to get default branch for %s: %v, defaulting to 'main'", project.Repo, err)
+			defaultBranchOutput = []byte("origin/main")
+		}
+		defaultBranch := strings.TrimPrefix(strings.TrimSpace(string(defaultBranchOutput)), "origin/")
+		fmt.Printf("Using base branch: %s\n", defaultBranch)
+
 		// Create PR using GitHub CLI
 		fmt.Printf("Creating pull request...\n")
 		cmd = exec.Command("gh", "pr", "create",
 			"--title", prTitle,
 			"--body", prDescription,
-			"--base", "main",
+			"--base", defaultBranch,
 			"--head", branchName)
 		cmd.Dir = targetPath
 		output, err = cmd.CombinedOutput()
