@@ -83,3 +83,9 @@ projects:
     slack_room: "#about-host-enablement"
   - repo: card-transaction-insights
     slack_room: "#acceptance-papi"
+  - repo: ecom-checkout-generator
+    slack_room: "#team-ecommerce"
+  - repo: ecom-transaction-payments
+    slack_room: "#team-ecommerce"
+  - repo: ecom-callback-gateway
+    slack_room: "#team-ecommerce"
