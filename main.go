@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +17,7 @@ import (
 type Project struct {
 	Repo      string `yaml:"repo"`
 	SlackRoom string `yaml:"slack_room"`
+	InCDE     bool   `yaml:"in_cde"`
 }
 
 type ProjectConfig struct {
@@ -196,6 +198,132 @@ func createGitHubIssues(selectedProjects []Project) {
 }
 
 func performChangesLocally(selectedProjects []Project) {
+	// ============================================================
+	// STEP 1: Collect all user inputs BEFORE any cloning/changes
+	// ============================================================
+
+	// Check if any selected projects are in CDE
+	hasCDEProjects := false
+	for _, project := range selectedProjects {
+		if project.InCDE {
+			hasCDEProjects = true
+			break
+		}
+	}
+
+	// Ask for Jira ticket if there are CDE projects
+	var jiraTicket string
+	if hasCDEProjects {
+		fmt.Println("\n⚠️  Note: Some selected projects are in CDE and require a Jira ticket in the PR title.")
+		fmt.Println("Please enter the Jira ticket (e.g., PROJ-123):")
+		jiraPrompt := promptui.Prompt{
+			Label: "Jira Ticket",
+		}
+
+		var err error
+		jiraTicket, err = jiraPrompt.Run()
+		if err != nil {
+			log.Fatal("Failed to get Jira ticket:", err)
+		}
+
+		jiraTicket = strings.TrimSpace(jiraTicket)
+		if jiraTicket == "" {
+			fmt.Println("No Jira ticket provided. Exiting.")
+			return
+		}
+	}
+
+	// Ask for PR title
+	fmt.Println("\nPlease enter the PR title:")
+	titlePrompt := promptui.Prompt{
+		Label: "PR Title",
+	}
+
+	prTitle, err := titlePrompt.Run()
+	if err != nil {
+		log.Fatal("Failed to get PR title:", err)
+	}
+
+	if strings.TrimSpace(prTitle) == "" {
+		fmt.Println("No PR title provided. Exiting.")
+		return
+	}
+
+	// Ask for the Claude prompt
+	fmt.Println("\nPlease enter the prompt for Claude CLI to execute on each repository:")
+	fmt.Println("Choose input method:")
+	fmt.Println("1. Type/paste single line (press Enter when done)")
+	fmt.Println("2. Open editor for multi-line input")
+
+	methodPrompt := promptui.Select{
+		Label: "Input method",
+		Items: []string{"Single line", "Editor"},
+	}
+
+	_, inputMethod, err := methodPrompt.Run()
+	if err != nil {
+		log.Fatal("Failed to select input method:", err)
+	}
+
+	var claudePrompt string
+
+	if inputMethod == "Single line" {
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("Prompt: ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			log.Fatal("Failed to read prompt:", err)
+		}
+		claudePrompt = strings.TrimSpace(line)
+	} else {
+		// Create a temporary file for the prompt
+		tmpFile, err := os.CreateTemp("", "copycat-prompt-*.txt")
+		if err != nil {
+			log.Fatal("Failed to create temp file:", err)
+		}
+		tmpFilePath := tmpFile.Name()
+		tmpFile.Close()
+		defer os.Remove(tmpFilePath)
+
+		// Get the editor from environment or use vim as default
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "vim"
+		}
+
+		// Open the editor
+		cmd := exec.Command(editor, tmpFilePath)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		err = cmd.Run()
+		if err != nil {
+			log.Fatal("Failed to run editor:", err)
+		}
+
+		// Read the content from the temp file
+		content, err := os.ReadFile(tmpFilePath)
+		if err != nil {
+			log.Fatal("Failed to read prompt from temp file:", err)
+		}
+
+		claudePrompt = strings.TrimSpace(string(content))
+	}
+
+	if claudePrompt == "" {
+		fmt.Println("No prompt provided. Exiting.")
+		return
+	}
+
+	// ============================================================
+	// STEP 2: Now proceed with cloning and making changes
+	// ============================================================
+
+	fmt.Println("\n" + strings.Repeat("=", 60))
+	fmt.Println("All inputs collected! Starting repository processing...")
+	fmt.Println(strings.Repeat("=", 60))
+
 	fmt.Println("\nCloning selected repositories...")
 
 	// Create repos directory if it doesn't exist
@@ -233,38 +361,6 @@ func performChangesLocally(selectedProjects []Project) {
 	timestamp := time.Now().Format("20060102-150405")
 	branchName := fmt.Sprintf("copycat-%s", timestamp)
 	fmt.Printf("\nUsing branch name: %s\n", branchName)
-
-	// Ask for PR title only
-	fmt.Println("\nPlease enter the PR title:")
-	titlePrompt := promptui.Prompt{
-		Label: "PR Title",
-	}
-
-	prTitle, err := titlePrompt.Run()
-	if err != nil {
-		log.Fatal("Failed to get PR title:", err)
-	}
-
-	if strings.TrimSpace(prTitle) == "" {
-		fmt.Println("No PR title provided. Exiting.")
-		return
-	}
-
-	// Ask for the Claude prompt
-	fmt.Println("\nPlease enter the prompt for Claude CLI to execute on each repository:")
-	promptInput := promptui.Prompt{
-		Label: "Prompt",
-	}
-
-	claudePrompt, err := promptInput.Run()
-	if err != nil {
-		log.Fatal("Failed to get prompt:", err)
-	}
-
-	if strings.TrimSpace(claudePrompt) == "" {
-		fmt.Println("No prompt provided. Exiting.")
-		return
-	}
 
 	// Execute Claude CLI and create PRs on each repository
 	fmt.Println("\nProcessing repositories...")
@@ -308,48 +404,24 @@ func performChangesLocally(selectedProjects []Project) {
 			continue
 		}
 
-		// Use Claude's output as PR description
-		prDescription := string(claudeOutput)
-		if len(prDescription) > 2000 {
-			// GitHub has a limit on PR description length, truncate if needed
-			prDescription = prDescription[:1997] + "..."
-		}
-
 		fmt.Printf("Claude completed the changes.\n")
 
-		// Show the proposed PR description and ask for confirmation
-		fmt.Println("\n════════════════════════════════════════")
-		fmt.Println("Proposed PR Description (from Claude):")
-		fmt.Println("════════════════════════════════════════")
-		fmt.Println(prDescription)
-		fmt.Println("════════════════════════════════════════")
+		// Generate PR description using Claude
+		fmt.Printf("Generating PR description...\n")
+		summaryPrompt := fmt.Sprintf("Write a concise PR description (2-3 sentences) for the following changes. Output ONLY the description text, no preamble:\n\n%s", string(claudeOutput))
 
-		// Ask user if they want to edit the description
-		editPrompt := promptui.Select{
-			Label: "Do you want to edit the PR description?",
-			Items: []string{"Use as is", "Edit description"},
-		}
+		cmd = exec.Command("claude", "--permission-mode", "acceptEdits", summaryPrompt)
+		cmd.Dir = targetPath
 
-		choice, _, err := editPrompt.Run()
+		summaryOutput, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Printf("Failed to get user choice: %v", err)
+			log.Printf("Failed to generate PR description for %s: %v\nOutput: %s", project.Repo, err, string(summaryOutput))
 			continue
 		}
 
-		switch choice {
-		case 0: // Use as is
-			// Continue with the current description
-		case 1: // Edit description
-			descPrompt := promptui.Prompt{
-				Label:   "PR Description",
-				Default: prDescription,
-			}
-
-			prDescription, err = descPrompt.Run()
-			if err != nil {
-				log.Printf("Failed to get PR description: %v", err)
-				continue
-			}
+		prDescription := string(summaryOutput)
+		if len(prDescription) > 2000 {
+			prDescription = prDescription[:1997] + "..."
 		}
 
 		// Check if there are changes to commit
@@ -409,8 +481,15 @@ func performChangesLocally(selectedProjects []Project) {
 
 		// Create PR using GitHub CLI
 		fmt.Printf("Creating pull request...\n")
+
+		// Determine final PR title based on whether project is in CDE
+		finalPRTitle := prTitle
+		if project.InCDE && jiraTicket != "" {
+			finalPRTitle = fmt.Sprintf("%s - %s", jiraTicket, prTitle)
+		}
+
 		cmd = exec.Command("gh", "pr", "create",
-			"--title", prTitle,
+			"--title", finalPRTitle,
 			"--body", prDescription,
 			"--base", defaultBranch,
 			"--head", branchName)
