@@ -100,7 +100,7 @@ projects:
     in_cde: false
   - repo: he-solar-events
     slack_room: "#about-host-enablement"
-    in_cde: false
+    in_cde: true
   - repo: he-solar-proxy
     slack_room: "#about-host-enablement"
     in_cde: false
