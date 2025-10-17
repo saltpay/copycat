@@ -357,11 +357,6 @@ func performChangesLocally(selectedProjects []Project) {
 
 	fmt.Println("\nAll repositories cloned successfully.")
 
-	// Generate branch name with timestamp
-	timestamp := time.Now().Format("20060102-150405")
-	branchName := fmt.Sprintf("copycat-%s", timestamp)
-	fmt.Printf("\nUsing branch name: %s\n", branchName)
-
 	// Execute Claude CLI and create PRs on each repository
 	fmt.Println("\nProcessing repositories...")
 	for _, project := range selectedProjects {
@@ -377,25 +372,18 @@ func performChangesLocally(selectedProjects []Project) {
 		fmt.Printf("Processing %s\n", project.Repo)
 		fmt.Printf("════════════════════════════════════════\n")
 
-		// Create and checkout new branch
-		fmt.Printf("Creating branch '%s'...\n", branchName)
-		cmd := exec.Command("git", "checkout", "-b", branchName)
-		cmd.Dir = targetPath
-		output, err := cmd.CombinedOutput()
+		// Check for existing copycat branches
+		branchName, err := selectOrCreateBranch(targetPath)
 		if err != nil {
-			// Try to checkout existing branch if creation failed
-			cmd = exec.Command("git", "checkout", branchName)
-			cmd.Dir = targetPath
-			output, err = cmd.CombinedOutput()
-			if err != nil {
-				log.Printf("Failed to create/checkout branch in %s: %v\nOutput: %s", project.Repo, err, string(output))
-				continue
-			}
+			log.Printf("Failed to select/create branch in %s: %v", project.Repo, err)
+			continue
 		}
+
+		fmt.Printf("Using branch: %s\n", branchName)
 
 		// Run claude CLI in non-interactive mode to capture output
 		fmt.Printf("Running Claude CLI to analyze and apply changes...\n")
-		cmd = exec.Command("claude", "--permission-mode", "acceptEdits", claudePrompt)
+		cmd := exec.Command("claude", "--permission-mode", "acceptEdits", claudePrompt)
 		cmd.Dir = targetPath
 
 		claudeOutput, err := cmd.CombinedOutput()
@@ -427,7 +415,7 @@ func performChangesLocally(selectedProjects []Project) {
 		// Check if there are changes to commit
 		cmd = exec.Command("git", "status", "--porcelain")
 		cmd.Dir = targetPath
-		output, err = cmd.CombinedOutput()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to check git status in %s: %v", project.Repo, err)
 			continue
@@ -518,6 +506,116 @@ func performChangesLocally(selectedProjects []Project) {
 	if err := os.Remove(reposDir); err == nil {
 		fmt.Println("✓ Removed empty repos directory")
 	}
+}
+
+func selectOrCreateBranch(repoPath string) (string, error) {
+	// Fetch latest branches from remote
+	fetchCmd := exec.Command("git", "fetch", "origin")
+	fetchCmd.Dir = repoPath
+	if _, err := fetchCmd.CombinedOutput(); err != nil {
+		log.Printf("Warning: Failed to fetch from remote: %v", err)
+	}
+
+	// Get all branches (local and remote) that match copycat-*
+	branchCmd := exec.Command("git", "branch", "-a", "--list", "*copycat-*")
+	branchCmd.Dir = repoPath
+	output, err := branchCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to list branches: %w", err)
+	}
+
+	// Parse the branches
+	var copycatBranches []string
+	if len(output) > 0 {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// Remove the "remotes/origin/" prefix if present
+			line = strings.TrimPrefix(line, "remotes/origin/")
+			// Remove asterisk if it's the current branch
+			line = strings.TrimPrefix(line, "* ")
+			// Skip HEAD references
+			if strings.Contains(line, "HEAD") {
+				continue
+			}
+			// Deduplicate
+			exists := false
+			for _, existing := range copycatBranches {
+				if existing == line {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				copycatBranches = append(copycatBranches, line)
+			}
+		}
+	}
+
+	// If there are existing copycat branches, let user choose
+	if len(copycatBranches) > 0 {
+		fmt.Printf("\nFound %d existing copycat branch(es):\n", len(copycatBranches))
+		for i, branch := range copycatBranches {
+			fmt.Printf("%d. %s\n", i+1, branch)
+		}
+
+		// Add option to create a new branch
+		options := append(copycatBranches, "Create new branch")
+
+		prompt := promptui.Select{
+			Label: "Select a branch or create a new one",
+			Items: options,
+		}
+
+		idx, _, err := prompt.Run()
+		if err != nil {
+			return "", fmt.Errorf("branch selection failed: %w", err)
+		}
+
+		// If user selected an existing branch
+		if idx < len(copycatBranches) {
+			selectedBranch := copycatBranches[idx]
+
+			// Try to checkout the branch
+			checkoutCmd := exec.Command("git", "checkout", selectedBranch)
+			checkoutCmd.Dir = repoPath
+			output, err := checkoutCmd.CombinedOutput()
+			if err != nil {
+				// If local checkout fails, try checking out from remote
+				checkoutCmd = exec.Command("git", "checkout", "-b", selectedBranch, fmt.Sprintf("origin/%s", selectedBranch))
+				checkoutCmd.Dir = repoPath
+				output, err = checkoutCmd.CombinedOutput()
+				if err != nil {
+					return "", fmt.Errorf("failed to checkout branch: %w\nOutput: %s", err, string(output))
+				}
+			}
+
+			// Pull latest changes
+			pullCmd := exec.Command("git", "pull", "origin", selectedBranch)
+			pullCmd.Dir = repoPath
+			if _, err := pullCmd.CombinedOutput(); err != nil {
+				log.Printf("Warning: Failed to pull latest changes: %v", err)
+			}
+
+			return selectedBranch, nil
+		}
+	}
+
+	// Create a new branch with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	newBranch := fmt.Sprintf("copycat-%s", timestamp)
+
+	cmd := exec.Command("git", "checkout", "-b", newBranch)
+	cmd.Dir = repoPath
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to create branch: %w\nOutput: %s", err, string(output))
+	}
+
+	return newBranch, nil
 }
 
 func createGitHubIssueWithCLI(project Project, title string, description string) error {

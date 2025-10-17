@@ -122,15 +122,3 @@ projects:
   - repo: techops-way4-exporter
     slack_room: "#about-host-enablement"
     in_cde: false
-  - repo: card-transaction-insights
-    slack_room: "#acceptance-papi"
-    in_cde: false
-  - repo: ecom-checkout-generator
-    slack_room: "#team-ecommerce"
-    in_cde: false
-  - repo: ecom-transaction-payments
-    slack_room: "#team-ecommerce"
-    in_cde: true
-  - repo: ecom-callback-gateway
-    slack_room: "#team-ecommerce"
-    in_cde: false
