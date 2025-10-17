@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -373,7 +374,7 @@ func performChangesLocally(selectedProjects []Project) {
 		fmt.Printf("════════════════════════════════════════\n")
 
 		// Check for existing copycat branches
-		branchName, err := selectOrCreateBranch(targetPath)
+		branchName, err := selectOrCreateBranch(targetPath, prTitle)
 		if err != nil {
 			log.Printf("Failed to select/create branch in %s: %v", project.Repo, err)
 			continue
@@ -508,7 +509,33 @@ func performChangesLocally(selectedProjects []Project) {
 	}
 }
 
-func selectOrCreateBranch(repoPath string) (string, error) {
+// createSlugFromTitle converts a PR title to a git-safe slug
+func createSlugFromTitle(title string) string {
+	// Remove Jira ticket prefix if present (e.g., "JIRA-123 - ")
+	re := regexp.MustCompile(`(?i)^[a-z]+-\d+\s*-\s*`)
+	slug := re.ReplaceAllString(title, "")
+
+	// Convert to lowercase
+	slug = strings.ToLower(slug)
+
+	// Replace spaces and special characters with hyphens
+	re = regexp.MustCompile(`[^a-z0-9]+`)
+	slug = re.ReplaceAllString(slug, "-")
+
+	// Remove leading/trailing hyphens
+	slug = strings.Trim(slug, "-")
+
+	// Limit length to 50 characters for readability
+	if len(slug) > 50 {
+		slug = slug[:50]
+		// Remove trailing hyphen if truncation created one
+		slug = strings.TrimRight(slug, "-")
+	}
+
+	return slug
+}
+
+func selectOrCreateBranch(repoPath, prTitle string) (string, error) {
 	// Fetch latest branches from remote
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
@@ -604,9 +631,17 @@ func selectOrCreateBranch(repoPath string) (string, error) {
 		}
 	}
 
-	// Create a new branch with timestamp
+	// Create a new branch with timestamp and slug
 	timestamp := time.Now().Format("20060102-150405")
-	newBranch := fmt.Sprintf("copycat-%s", timestamp)
+	slug := createSlugFromTitle(prTitle)
+
+	var newBranch string
+	if slug != "" {
+		newBranch = fmt.Sprintf("copycat-%s-%s", timestamp, slug)
+	} else {
+		// Fallback to just timestamp if slug is empty
+		newBranch = fmt.Sprintf("copycat-%s", timestamp)
+	}
 
 	cmd := exec.Command("git", "checkout", "-b", newBranch)
 	cmd.Dir = repoPath
