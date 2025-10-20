@@ -318,14 +318,12 @@ func performChangesLocally(selectedProjects []Project) {
 	}
 
 	// ============================================================
-	// STEP 2: Now proceed with cloning and making changes
+	// STEP 2: Now proceed with processing each repository
 	// ============================================================
 
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println("All inputs collected! Starting repository processing...")
 	fmt.Println(strings.Repeat("=", 60))
-
-	fmt.Println("\nCloning selected repositories...")
 
 	// Create repos directory if it doesn't exist
 	reposDir := "repos"
@@ -333,50 +331,47 @@ func performChangesLocally(selectedProjects []Project) {
 		log.Fatal("Failed to create repos directory:", err)
 	}
 
-	for _, project := range selectedProjects {
-		fmt.Printf("\nCloning %s...\n", project.Repo)
-
-		// Use SSH URL for cloning
-		repoURL := fmt.Sprintf("git@github.com:saltpay/%s.git", project.Repo)
-		targetPath := fmt.Sprintf("%s/%s", reposDir, project.Repo)
-
-		// Check if repository already exists
-		if _, err := os.Stat(targetPath); err == nil {
-			fmt.Printf("✓ Repository %s already exists in %s\n", project.Repo, targetPath)
-			continue
-		}
-
-		cmd := exec.Command("git", "clone", repoURL, targetPath)
-
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.Printf("Failed to clone %s: %v\nOutput: %s", project.Repo, err, string(output))
-		} else {
-			fmt.Printf("✓ Successfully cloned %s to %s\n", project.Repo, targetPath)
-		}
-	}
-
-	fmt.Println("\nAll repositories cloned successfully.")
-
-	// Execute Claude CLI and create PRs on each repository
-	fmt.Println("\nProcessing repositories...")
+	// Process each repository: clone → apply changes → commit → PR
 	for _, project := range selectedProjects {
 		targetPath := fmt.Sprintf("%s/%s", reposDir, project.Repo)
-
-		// Check if directory exists before running claude
-		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-			fmt.Printf("⚠️  Skipping %s - directory not found\n", project.Repo)
-			continue
-		}
 
 		fmt.Printf("\n════════════════════════════════════════\n")
 		fmt.Printf("Processing %s\n", project.Repo)
 		fmt.Printf("════════════════════════════════════════\n")
 
+		// Helper function to cleanup before continuing
+		cleanup := func() {
+			fmt.Printf("Cleaning up %s...\n", targetPath)
+			if err := os.RemoveAll(targetPath); err != nil {
+				log.Printf("Warning: Failed to remove %s: %v", targetPath, err)
+			} else {
+				fmt.Printf("✓ Cleaned up %s\n", targetPath)
+			}
+		}
+
+		// Clone the repository if it doesn't exist
+		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+			fmt.Printf("\nCloning %s...\n", project.Repo)
+
+			// Use SSH URL for cloning
+			repoURL := fmt.Sprintf("git@github.com:saltpay/%s.git", project.Repo)
+
+			cmd := exec.Command("git", "clone", repoURL, targetPath)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Printf("Failed to clone %s: %v\nOutput: %s", project.Repo, err, string(output))
+				continue
+			}
+			fmt.Printf("✓ Successfully cloned %s\n", project.Repo)
+		} else {
+			fmt.Printf("✓ Repository %s already exists, using existing clone\n", project.Repo)
+		}
+
 		// Check for existing copycat branches
 		branchName, err := selectOrCreateBranch(targetPath, prTitle)
 		if err != nil {
 			log.Printf("Failed to select/create branch in %s: %v", project.Repo, err)
+			cleanup()
 			continue
 		}
 
@@ -390,6 +385,7 @@ func performChangesLocally(selectedProjects []Project) {
 		claudeOutput, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to run Claude CLI on %s: %v\nOutput: %s", project.Repo, err, string(claudeOutput))
+			cleanup()
 			continue
 		}
 
@@ -405,6 +401,7 @@ func performChangesLocally(selectedProjects []Project) {
 		summaryOutput, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to generate PR description for %s: %v\nOutput: %s", project.Repo, err, string(summaryOutput))
+			cleanup()
 			continue
 		}
 
@@ -419,11 +416,13 @@ func performChangesLocally(selectedProjects []Project) {
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to check git status in %s: %v", project.Repo, err)
+			cleanup()
 			continue
 		}
 
 		if len(output) == 0 {
 			fmt.Printf("No changes detected in %s, skipping PR creation\n", project.Repo)
+			cleanup()
 			continue
 		}
 
@@ -434,6 +433,7 @@ func performChangesLocally(selectedProjects []Project) {
 		_, err = cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to add changes in %s: %v", project.Repo, err)
+			cleanup()
 			continue
 		}
 
@@ -444,6 +444,7 @@ func performChangesLocally(selectedProjects []Project) {
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to commit changes in %s: %v\nOutput: %s", project.Repo, err, string(output))
+			cleanup()
 			continue
 		}
 
@@ -454,6 +455,7 @@ func performChangesLocally(selectedProjects []Project) {
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to push branch in %s: %v\nOutput: %s", project.Repo, err, string(output))
+			cleanup()
 			continue
 		}
 
@@ -486,6 +488,7 @@ func performChangesLocally(selectedProjects []Project) {
 		output, err = cmd.CombinedOutput()
 		if err != nil {
 			log.Printf("Failed to create PR for %s: %v\nOutput: %s", project.Repo, err, string(output))
+			cleanup()
 			continue
 		}
 
@@ -493,12 +496,7 @@ func performChangesLocally(selectedProjects []Project) {
 		fmt.Printf("PR URL: %s", string(output))
 
 		// Clean up the cloned repository
-		fmt.Printf("Cleaning up %s...\n", targetPath)
-		if err := os.RemoveAll(targetPath); err != nil {
-			log.Printf("Warning: Failed to remove %s: %v", targetPath, err)
-		} else {
-			fmt.Printf("✓ Cleaned up %s\n", targetPath)
-		}
+		cleanup()
 	}
 
 	fmt.Println("\nAll repositories have been processed.")
