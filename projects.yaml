@@ -38,18 +38,6 @@ projects:
   - repo: consent-orchestrator-gateway
     slack_room: "#acceptance-papi"
     in_cde: false
-  - repo: ecom-transaction-payments
-    slack_room: "#acceptance-papi"
-    in_cde: true
-  - repo: ecom-callback-gateway
-    slack_room: "#acceptance-papi"
-    in_cde: false
-  - repo: ecom-checkout-generator
-    slack_room: "#acceptance-papi"
-    in_cde: false
-  - repo: ecom-checkout-backend
-    slack_room: "#acceptance-papi"
-    in_cde: false
   - repo: fake4-acquiring-host
     slack_room: "#acceptance-papi"
     in_cde: false
@@ -121,4 +109,35 @@ projects:
     in_cde: false
   - repo: techops-way4-exporter
     slack_room: "#about-host-enablement"
+    in_cde: false
+# Ecommerce Projects
+  - repo: ecom-transaction-payments
+    slack_room: "#team-ecommerce"
+    in_cde: true
+  - repo: ecom-callback-gateway
+    slack_room: "#team-ecommerce"
+    in_cde: false
+  - repo: ecom-checkout-payments
+    slack_room: "#team-ecommerce"
+    in_cde: true  
+  - repo: ecom-checkout-generator
+    slack_room: "#team-ecommerce"
+    in_cde: false
+  - repo: ecom-checkout-backend
+    slack_room: "#team-ecommerce"
+    in_cde: false
+  - repo: ecom-checkout-frontend
+    slack_room: "#team-ecommerce"
+    in_cde: false  
+  - repo: ecom-onboarding-service
+    slack_room: "#team-ecommerce"
+    in_cde: false
+  - repo: teya-webhook-service
+    slack_room: "#team-ecommerce"
+    in_cde: false
+  - repo: ecom-modirum-mock
+    slack_room: "#team-ecommerce"
+    in_cde: false
+  - repo: digital-receipts-service
+    slack_room: "#team-ecommerce"
     in_cde: false
