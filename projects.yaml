@@ -21,8 +21,11 @@ projects:
     slack_room: "#acceptance-papi"
     in_cde: false
   - repo: acceptance-tap-onboarding
-    slack_room: "#acceptance-papi"
+    slack_room: "#team-tap"
     in_cde: false
+  - repo: acceptance-tap-transactions
+    slack_room: "#team-tap"
+    in_cde: true
   - repo: acquiring-payments-api
     slack_room: "#acceptance-papi"
     in_cde: false
