@@ -59,9 +59,6 @@ projects:
   - repo: pricing-engine-service
     slack_room: "#acceptance-papi"
     in_cde: false
-  - repo: pricing-app-backend
-    slack_room: "#acceptance-papi"
-    in_cde: false
   - repo: salt-tokenization-service
     slack_room: "#acceptance-papi"
     in_cde: true
