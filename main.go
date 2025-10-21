@@ -228,6 +228,7 @@ func performChangesLocally(selectedProjects []Project) {
 		}
 
 		jiraTicket = strings.TrimSpace(jiraTicket)
+		jiraTicket = strings.ToUpper(jiraTicket)
 		if jiraTicket == "" {
 			fmt.Println("No Jira ticket provided. Exiting.")
 			return
@@ -473,9 +474,10 @@ func performChangesLocally(selectedProjects []Project) {
 		// Create PR using GitHub CLI
 		fmt.Printf("Creating pull request...\n")
 
-		// Determine final PR title based on whether project is in CDE
+		// Determine final PR title when Jira ticket was provided
+		// Ignore when the PR title already starts with the Jira ticket
 		finalPRTitle := prTitle
-		if project.InCDE && jiraTicket != "" {
+		if jiraTicket != "" && !strings.HasPrefix(strings.ToUpper(prTitle), jiraTicket) {
 			finalPRTitle = fmt.Sprintf("%s - %s", jiraTicket, prTitle)
 		}
 
