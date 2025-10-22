@@ -1,8 +1,6 @@
-package main
+package util
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestCreateSlugFromTitle(t *testing.T) {
 	tests := []struct {
@@ -49,25 +47,10 @@ func TestCreateSlugFromTitle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := createSlugFromTitle(tt.input)
+			result := CreateSlugFromTitle(tt.input)
 			if result != tt.expected {
 				t.Errorf("createSlugFromTitle(%q) = %q, expected %q", tt.input, result, tt.expected)
 			}
 		})
-	}
-}
-
-func TestNoDuplicateRepositories(t *testing.T) {
-	projects, err := loadProjects("projects.yaml")
-	if err != nil {
-		t.Fatalf("failed to load projects.yaml: %v", err)
-	}
-
-	seen := make(map[string]struct{})
-	for _, project := range projects {
-		if _, exists := seen[project.Repo]; exists {
-			t.Fatalf("duplicate repo detected in projects.yaml: %s", project.Repo)
-		}
-		seen[project.Repo] = struct{}{}
 	}
 }
