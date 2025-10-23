@@ -1,0 +1,22 @@
+default: claude
+
+tools:
+  - name: claude
+    command: claude
+    code_args:
+      - --permission-mode
+      - acceptEdits
+    summary_args: []
+  - name: codex
+    command: codex
+    code_args:
+      - exec
+      - --full-auto
+    summary_args: []
+  - name: qwen
+    command: qwen
+    code_args:
+      - --approval-mode
+      - auto-edit
+      - -p
+    summary_args: []

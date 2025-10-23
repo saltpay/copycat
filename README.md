@@ -6,7 +6,7 @@ Welcome to Copycat, a way to copy changes from one git repository to another.
      alt="Copycat logo"
      style="margin-bottom: 10px; animation: spin 2s linear infinite; transform-origin: center center;" />
 
-Copycat is an automation tool that enables you to apply consistent changes across multiple GitHub repositories using Claude AI. It streamlines the process of creating issues or performing code changes at scale.
+Copycat is an automation tool that enables you to apply consistent changes across multiple GitHub repositories using AI coding assistants. It streamlines the process of creating issues or performing code changes at scale with support for multiple AI tools including Claude, Codex, Qwen, and others.
 
 ## Requirements
 
@@ -14,7 +14,11 @@ In order to run Copycat, you need to have the following installed:
 
 - **Go** (1.16 or later)
 - **GitHub CLI** (`gh`) - [Installation guide](https://cli.github.com/)
-- **Claude CLI** (`claude`) - [Installation guide](https://docs.claude.com/en/docs/claude-code)
+- **AI Coding Assistant** - At least one of:
+  - **Claude CLI** (`claude`) - [Installation guide](https://docs.claude.com/en/docs/claude-code)
+  - **Codex** (`codex`)
+  - **Qwen** (`qwen`)
+  - Or any other AI tool configured in `ai-tools.yaml`
 
 ### Authentication Setup
 
@@ -24,11 +28,51 @@ Before using Copycat, ensure you're authenticated:
 # Authenticate with GitHub
 gh auth login
 
-# Authenticate with Claude (if required)
+# Authenticate with your chosen AI tool (example with Claude)
 claude auth login
 ```
 
 ## Configuration
+
+### AI Tools Configuration
+
+Create an `ai-tools.yaml` file to configure which AI coding assistants you want to use:
+
+```yaml
+default: claude
+
+tools:
+  - name: claude
+    command: claude
+    code_args:
+      - --permission-mode
+      - acceptEdits
+    summary_args: []
+  - name: codex
+    command: codex
+    code_args:
+      - exec
+      - --full-auto
+    summary_args: []
+  - name: qwen
+    command: qwen
+    code_args:
+      - --approval-mode
+      - auto-edit
+      - -p
+    summary_args: []
+```
+
+#### AI Tools Configuration Fields
+
+- `default`: The default AI tool to use when `--ai-tool` flag is not specified
+- `tools`: List of available AI tools
+  - `name`: Identifier for the tool (used with `--ai-tool` flag)
+  - `command`: The CLI command to execute
+  - `code_args`: Arguments passed when making code changes
+  - `summary_args`: Arguments passed when generating PR descriptions (optional)
+
+### Project Configuration
 
 Create a `projects.yaml` file in the same directory as `main.go` with your repository configuration:
 
@@ -42,7 +86,7 @@ projects:
     in_cde: true
 ```
 
-### Configuration Fields
+#### Configuration Fields
 
 - `repo`: Repository name (without the org prefix - org is hardcoded as "saltpay")
 - `slack_room`: Associated Slack channel for the project
@@ -53,12 +97,18 @@ projects:
 ### Quick Start
 
 ```bash
-# Run the tool
+# Run with default AI tool (specified in ai-tools.yaml)
 go run main.go
+
+# Run with a specific AI tool
+go run main.go --ai-tool claude
+go run main.go --ai-tool codex
+go run main.go --ai-tool qwen
 
 # Or build and run
 go build -o copycat
 ./copycat
+./copycat --ai-tool qwen
 ```
 
 ### Workflow Options
@@ -80,20 +130,20 @@ Creates GitHub issues across selected repositories and assigns them to @copilot.
 
 #### 2. Perform Changes Locally
 
-Clones repositories, applies changes using Claude AI, and creates pull requests.
+Clones repositories, applies changes using your configured AI coding assistant, and creates pull requests.
 
 **Steps:**
 1. Select repositories from the list (or type "all")
 2. Choose "Perform Changes Locally"
 3. If any selected project has `in_cde: true`, enter a Jira ticket (e.g., PROJ-123)
 4. Enter PR title
-5. Enter the Claude prompt:
+5. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter
    - **Editor**: Opens your default editor (set via `$EDITOR` env var, defaults to vim)
 6. Copycat will:
    - Clone all selected repositories to `repos/` directory
    - Create a timestamped branch (e.g., `copycat-20231015-150405`)
-   - Run Claude CLI to analyze and apply changes
+   - Run your chosen AI tool to analyze and apply changes
    - Generate PR description automatically
    - Commit and push changes
    - Create pull requests
@@ -123,18 +173,18 @@ Example: `copycat-20231015-150405`
 ### Local Changes Workflow
 
 1. **Input Collection Phase**
-   - Collects all user inputs upfront (Jira ticket, PR title, Claude prompt)
+   - Collects all user inputs upfront (Jira ticket, PR title, AI prompt)
    - Validates inputs before processing
 
 2. **Repository Processing Phase**
    - Cleans up existing `repos/` directory
    - Clones selected repositories via SSH
    - Creates a new timestamped branch
-   - Runs Claude CLI in non-interactive mode with `--permission-mode acceptEdits`
-   - Captures Claude's output for PR description
+   - Runs your configured AI tool with appropriate arguments (from `ai-tools.yaml`)
+   - Captures AI output for PR description
 
 3. **PR Generation Phase**
-   - Uses Claude to generate a concise PR description (2-3 sentences)
+   - Uses your AI tool to generate a concise PR description (2-3 sentences)
    - Commits changes using the PR title as commit message
    - Pushes branch to origin
    - Detects default branch automatically
@@ -152,13 +202,24 @@ Example: `copycat-20231015-150405`
 
 ```
 copycat/
-├── main.go              # Main application code
-├── projects.yaml        # Repository configuration
-├── go.mod              # Go module dependencies
-├── go.sum              # Go module checksums
-├── README.md           # This file
-├── copycat-logo.png    # Logo image
-└── repos/              # Temporary directory for cloned repos (auto-cleaned)
+├── main.go                     # Main application code
+├── projects.yaml               # Repository configuration
+├── ai-tools.yaml              # AI tools configuration
+├── internal/
+│   ├── ai/
+│   │   └── ai.go              # AI tool integration logic
+│   ├── config/
+│   │   ├── config.go          # Configuration loading
+│   │   └── config_test.go     # Configuration tests
+│   ├── input/
+│   │   └── ai_prompt.go       # User input handling
+│   ├── git/
+│   └── filesystem/
+├── go.mod                      # Go module dependencies
+├── go.sum                      # Go module checksums
+├── README.md                   # This file
+├── copycat-logo.png            # Logo image
+└── repos/                      # Temporary directory for cloned repos (auto-cleaned)
 ```
 
 ## Troubleshooting
@@ -169,10 +230,11 @@ copycat/
 - Ensure you have SSH access to the repositories
 - Check your SSH keys: `ssh -T git@github.com`
 
-**Claude CLI fails:**
-- Verify Claude CLI is installed and in your PATH
-- Check Claude authentication
+**AI tool fails:**
+- Verify your chosen AI tool is installed and in your PATH
+- Check authentication with your AI tool
 - Ensure repositories have proper file permissions
+- Verify the AI tool configuration in `ai-tools.yaml` is correct
 
 **PR creation fails:**
 - Verify you're authenticated with GitHub CLI: `gh auth status`
@@ -180,17 +242,20 @@ copycat/
 - Ensure the base branch exists
 
 **No changes detected:**
-- Claude may not have made any modifications
+- Your AI tool may not have made any modifications
 - Review your prompt for clarity
 - Check if the prompt applies to the specific repository
+- Verify the AI tool is configured correctly with appropriate arguments
 
 ## Best Practices
 
 1. **Test with a single repository first** before running on all projects
-2. **Use clear, specific prompts** for Claude
+2. **Use clear, specific prompts** for your AI tool
 3. **Review changes** before merging PRs
 4. **Keep Jira tickets handy** for CDE projects
 5. **Use the editor option** for complex multi-line prompts
+6. **Configure AI tool arguments properly** in `ai-tools.yaml` for optimal results
+7. **Try different AI tools** for different types of tasks using the `--ai-tool` flag
 
 ## Examples
 

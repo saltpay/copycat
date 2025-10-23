@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +20,26 @@ import (
 const reposDir = "repos"
 
 func main() {
+	aiToolFlag := flag.String("ai-tool", "", "Name of the AI tool to use (configured in ai-tools.yaml)")
+	flag.Parse()
+
+	aiToolsConfig, err := config.LoadAITools("ai-tools.yaml")
+	if err != nil {
+		log.Fatal("Failed to load AI tools:", err)
+	}
+
+	selectedToolName := *aiToolFlag
+	if selectedToolName == "" {
+		selectedToolName = aiToolsConfig.Default
+	}
+
+	selectedTool, ok := aiToolsConfig.ToolByName(selectedToolName)
+	if !ok {
+		log.Fatalf("AI tool %q not found in ai-tools.yaml", selectedToolName)
+	}
+
+	fmt.Printf("Using AI tool: %s (%s)\n", selectedTool.Name, selectedTool.Command)
+
 	filesystem.DeleteWorkspace()
 
 	projects, err := config.LoadProjects("projects.yaml")
@@ -62,13 +83,13 @@ func main() {
 		fmt.Println("")
 		git.CreateGitHubIssues(selectedProjects)
 	case "Perform Changes Locally":
-		performChangesLocally(selectedProjects)
+		performChangesLocally(selectedProjects, selectedTool)
 	}
 
 	fmt.Println("\nDone!")
 }
 
-func performChangesLocally(selectedProjects []config.Project) {
+func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool) {
 	// ============================================================
 	// STEP 1: Collect all user inputs BEFORE any cloning/changes
 	// ============================================================
@@ -121,8 +142,8 @@ func performChangesLocally(selectedProjects []config.Project) {
 		return
 	}
 
-	claudePrompt := input.ReadClaudePrompt()
-	if claudePrompt == "" {
+	vibeCodePrompt := input.ReadAIPrompt(aiTool)
+	if vibeCodePrompt == "" {
 		fmt.Println("No prompt provided. Exiting.")
 		return
 	}
@@ -178,16 +199,16 @@ func performChangesLocally(selectedProjects []config.Project) {
 
 		fmt.Printf("Using branch: %s\n", branchName)
 
-		claudeOutput, err := ai.VibeCode(claudePrompt, targetPath)
+		aiOutput, err := ai.VibeCode(aiTool, vibeCodePrompt, targetPath)
 		if err != nil {
-			log.Printf("Failed to run Claude CLI on %s: %v\nOutput: %s", project.Repo, err, claudeOutput)
+			log.Printf("Failed to run AI tool on %s: %v\nOutput: %s", project.Repo, err, aiOutput)
 			cleanup()
 			continue
 		}
 
-		fmt.Printf("Claude completed the changes.\n")
+		fmt.Printf("%s completed the changes.\n", aiTool.Name)
 
-		prDescription, err := ai.GeneratePRDescription(project, claudeOutput, targetPath)
+		prDescription, err := ai.GeneratePRDescription(aiTool, project, aiOutput, targetPath)
 		if err != nil {
 			log.Printf("Failed to generate PR description for %s: %v\nOutput: %s", project.Repo, err, prDescription)
 			cleanup()

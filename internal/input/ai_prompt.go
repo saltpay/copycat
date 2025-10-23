@@ -2,6 +2,7 @@ package input
 
 import (
 	"bufio"
+	"copycat/internal/config"
 	"fmt"
 	"log"
 	"os"
@@ -11,9 +12,9 @@ import (
 	"github.com/manifoldco/promptui"
 )
 
-func ReadClaudePrompt() string {
+func ReadAIPrompt(aiTool *config.AITool) string {
 	// Ask for the Claude prompt
-	fmt.Println("\nPlease enter the prompt for Claude CLI to execute on each repository:")
+	fmt.Printf("\nPlease enter the prompt for %s to execute on each repository:\n", aiTool.Name)
 	fmt.Println("Choose input method:")
 	fmt.Println("1. Type/paste single line (press Enter when done)")
 	fmt.Println("2. Open editor for multi-line input")
@@ -28,7 +29,7 @@ func ReadClaudePrompt() string {
 		log.Fatal("Failed to select input method:", err)
 	}
 
-	var claudePrompt string
+	var aiPrompt string
 
 	if inputMethod == "Single line" {
 		reader := bufio.NewReader(os.Stdin)
@@ -37,7 +38,7 @@ func ReadClaudePrompt() string {
 		if err != nil {
 			log.Fatal("Failed to read prompt:", err)
 		}
-		claudePrompt = strings.TrimSpace(line)
+		aiPrompt = strings.TrimSpace(line)
 	} else {
 		// Create a temporary file for the prompt
 		tmpFile, err := os.CreateTemp("", "copycat-prompt-*.txt")
@@ -78,8 +79,8 @@ func ReadClaudePrompt() string {
 			log.Fatal("Failed to read prompt from temp file:", err)
 		}
 
-		claudePrompt = strings.TrimSpace(string(content))
+		aiPrompt = strings.TrimSpace(string(content))
 	}
 
-	return claudePrompt
+	return aiPrompt
 }

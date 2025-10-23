@@ -1,6 +1,8 @@
 package config
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestNoDuplicateRepositories(t *testing.T) {
 	projects, err := LoadProjects("../../projects.yaml")
