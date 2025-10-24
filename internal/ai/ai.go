@@ -3,13 +3,12 @@ package ai
 import (
 	"copycat/internal/config"
 	"fmt"
-	"os/exec"
 )
 
 func VibeCode(aiTool *config.AITool, prompt string, targetPath string) (string, error) {
 	// Run the configured AI tool in non-interactive mode to capture output
 	fmt.Printf("Running %s to analyze and apply changes...\n", aiTool.Name)
-	cmd := buildAIToolCommand(aiTool, prompt, false)
+	cmd := aiTool.BuildCommand(prompt, aiTool.CodeArgs)
 	cmd.Dir = targetPath
 
 	output, err := cmd.CombinedOutput()
@@ -22,10 +21,10 @@ func GeneratePRDescription(aiTool *config.AITool, project config.Project, aiOutp
 
 	// Run the configured AI tool in non-interactive mode to capture output
 	fmt.Printf("Generating PR description...\n")
-	cmd := buildAIToolCommand(aiTool, summaryPrompt, true)
+	cmd := aiTool.BuildCommand(summaryPrompt, aiTool.SummaryArgs)
 	cmd.Dir = targetPath
 
-	summaryOutput, err := cmd.CombinedOutput()
+	summaryOutput, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("Failed to generate PR description for %s: %v\nOutput: %s", project.Repo, err, string(summaryOutput))
 	}
@@ -36,16 +35,4 @@ func GeneratePRDescription(aiTool *config.AITool, project config.Project, aiOutp
 	}
 
 	return prDescription, nil
-}
-
-func buildAIToolCommand(tool *config.AITool, prompt string, useSummaryArgs bool) *exec.Cmd {
-	var args []string
-	switch {
-	case useSummaryArgs && len(tool.SummaryArgs) > 0:
-		args = append([]string{}, tool.SummaryArgs...)
-	default:
-		args = append([]string{}, tool.CodeArgs...)
-	}
-	args = append(args, prompt)
-	return exec.Command(tool.Command, args...)
 }

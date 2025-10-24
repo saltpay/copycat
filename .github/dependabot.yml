@@ -1,7 +1,9 @@
 version: 2
 updates:
-  - package-ecosystem: go
+  - package-ecosystem: gomod
     directory: "/"
+    cooldown:
+      default-days: 5
     schedule:
       interval: daily
     open-pull-requests-limit: 10

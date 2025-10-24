@@ -20,3 +20,9 @@ tools:
       - auto-edit
       - -p
     summary_args: []
+  - name: gemini
+    command: gemini
+    code_args:
+      - --approval-mode
+      - auto_edit
+    summary_args: []

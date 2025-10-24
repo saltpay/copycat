@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,6 +23,12 @@ type AITool struct {
 	Command     string   `yaml:"command"`
 	CodeArgs    []string `yaml:"code_args"`
 	SummaryArgs []string `yaml:"summary_args"`
+}
+
+func (t *AITool) BuildCommand(prompt string, baseArgs []string) *exec.Cmd {
+	args := append([]string{}, baseArgs...)
+	args = append(args, prompt)
+	return exec.Command(t.Command, args...)
 }
 
 type AIToolsConfig struct {
