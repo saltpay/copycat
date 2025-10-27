@@ -2,14 +2,13 @@ package git
 
 import (
 	"copycat/internal/config"
+	"copycat/internal/input"
 	"copycat/internal/util"
 	"fmt"
 	"log"
 	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/manifoldco/promptui"
 )
 
 func CheckLocalChanges(targetPath string) ([]byte, error) {
@@ -111,26 +110,18 @@ func SelectOrCreateBranch(repoPath, prTitle string) (string, error) {
 	// If there are existing copycat branches, let user choose
 	if len(copycatBranches) > 0 {
 		fmt.Printf("\nFound %d existing copycat branch(es):\n", len(copycatBranches))
-		for i, branch := range copycatBranches {
-			fmt.Printf("%d. %s\n", i+1, branch)
-		}
 
 		// Add option to create a new branch
 		options := append(copycatBranches, "Create new branch")
 
-		prompt := promptui.Select{
-			Label: "Select a branch or create a new one",
-			Items: options,
-		}
-
-		idx, _, err := prompt.Run()
+		selectedOption, err := input.SelectOption("Select a branch or create a new one", options)
 		if err != nil {
 			return "", fmt.Errorf("branch selection failed: %w", err)
 		}
 
-		// If user selected an existing branch
-		if idx < len(copycatBranches) {
-			selectedBranch := copycatBranches[idx]
+		// If user selected "Create new branch", we'll fall through to the creation logic
+		if selectedOption != "Create new branch" {
+			selectedBranch := selectedOption
 
 			// Try to checkout the branch
 			checkoutCmd := exec.Command("git", "checkout", selectedBranch)

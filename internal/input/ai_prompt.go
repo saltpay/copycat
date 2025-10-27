@@ -8,23 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-
-	"github.com/manifoldco/promptui"
 )
 
 func ReadAIPrompt(aiTool *config.AITool) string {
 	// Ask for the Claude prompt
 	fmt.Printf("\nPlease enter the prompt for %s to execute on each repository:\n", aiTool.Name)
-	fmt.Println("Choose input method:")
-	fmt.Println("1. Type/paste single line (press Enter when done)")
-	fmt.Println("2. Open editor for multi-line input")
 
-	methodPrompt := promptui.Select{
-		Label: "Input method",
-		Items: []string{"Single line", "Editor"},
-	}
-
-	_, inputMethod, err := methodPrompt.Run()
+	inputMethod, err := SelectOption("Choose input method", []string{"Single line", "Editor"})
 	if err != nil {
 		log.Fatal("Failed to select input method:", err)
 	}

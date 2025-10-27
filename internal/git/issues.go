@@ -2,41 +2,21 @@ package git
 
 import (
 	"copycat/internal/config"
+	"copycat/internal/input"
 	"fmt"
 	"log"
 	"os/exec"
-	"strings"
-
-	"github.com/manifoldco/promptui"
 )
 
 func CreateGitHubIssues(selectedProjects []config.Project) {
-	fmt.Println("\nPlease enter the issue title:")
-	titlePrompt := promptui.Prompt{
-		Label: "Title",
-	}
-
-	issueTitle, err := titlePrompt.Run()
+	issueTitle, err := input.GetTextInput("Issue Title", "Enter the title for the GitHub issue")
 	if err != nil {
-		log.Fatal("Failed to get title:", err)
-	}
-
-	if strings.TrimSpace(issueTitle) == "" {
 		fmt.Println("No title provided. Exiting.")
 		return
 	}
 
-	fmt.Println("\nPlease enter the issue description:")
-	descriptionPrompt := promptui.Prompt{
-		Label: "Description",
-	}
-
-	issueDescription, err := descriptionPrompt.Run()
+	issueDescription, err := input.GetTextInput("Issue Description", "Enter the description for the GitHub issue")
 	if err != nil {
-		log.Fatal("Failed to get description:", err)
-	}
-
-	if strings.TrimSpace(issueDescription) == "" {
 		fmt.Println("No description provided. Exiting.")
 		return
 	}

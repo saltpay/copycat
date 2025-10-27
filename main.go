@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -13,34 +12,27 @@ import (
 	"copycat/internal/filesystem"
 	"copycat/internal/git"
 	"copycat/internal/input"
-
-	"github.com/manifoldco/promptui"
 )
 
 const reposDir = "repos"
 
 func main() {
-	aiToolFlag := flag.String("ai-tool", "", "Name of the AI tool to use (configured in ai-tools.yaml)")
-	flag.Parse()
+	filesystem.DeleteWorkspace()
 
+	// Load AI tools configuration
 	aiToolsConfig, err := config.LoadAITools("ai-tools.yaml")
 	if err != nil {
 		log.Fatal("Failed to load AI tools:", err)
 	}
 
-	selectedToolName := *aiToolFlag
-	if selectedToolName == "" {
-		selectedToolName = aiToolsConfig.Default
+	// Interactive AI tool selection
+	selectedTool, err := input.SelectAITool(aiToolsConfig)
+	if err != nil {
+		fmt.Println("AI tool selection cancelled. Exiting.")
+		return
 	}
 
-	selectedTool, ok := aiToolsConfig.ToolByName(selectedToolName)
-	if !ok {
-		log.Fatalf("AI tool %q not found in ai-tools.yaml", selectedToolName)
-	}
-
-	fmt.Printf("Using AI tool: %s (%s)\n", selectedTool.Name, selectedTool.Command)
-
-	filesystem.DeleteWorkspace()
+	fmt.Printf("\n✓ Using AI tool: %s (%s)\n\n", selectedTool.Name, selectedTool.Command)
 
 	projects, err := config.LoadProjects("projects.yaml")
 	if err != nil {
@@ -66,17 +58,13 @@ func main() {
 	}
 
 	// Ask user to choose the workflow
-	prompt := promptui.Select{
-		Label: "Choose an action",
-		Items: []string{"Create GitHub Issues", "Perform Changes Locally"},
-	}
-
-	_, result, err := prompt.Run()
+	action, err := input.SelectOption("Choose an action", []string{"Create GitHub Issues", "Perform Changes Locally"})
 	if err != nil {
-		log.Fatal("Action selection failed:", err)
+		fmt.Println("Action selection cancelled. Exiting.")
+		return
 	}
 
-	switch result {
+	switch action {
 	case "Create GitHub Issues":
 		fmt.Println("\n⚠️  WARNING: The Copilot agent does not sign commits.")
 		fmt.Println("You will need to fix unsigned commits before merging any pull request.")
@@ -107,37 +95,20 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	var jiraTicket string
 	if hasCDEProjects {
 		fmt.Println("\n⚠️  Note: Some selected projects are in CDE and require a Jira ticket in the PR title.")
-		fmt.Println("Please enter the Jira ticket (e.g., PROJ-123):")
-		jiraPrompt := promptui.Prompt{
-			Label: "Jira Ticket",
-		}
 
 		var err error
-		jiraTicket, err = jiraPrompt.Run()
+		jiraTicket, err = input.GetTextInput("Jira Ticket", "e.g., PROJ-123")
 		if err != nil {
-			log.Fatal("Failed to get Jira ticket:", err)
-		}
-
-		jiraTicket = strings.TrimSpace(jiraTicket)
-		jiraTicket = strings.ToUpper(jiraTicket)
-		if jiraTicket == "" {
 			fmt.Println("No Jira ticket provided. Exiting.")
 			return
 		}
+
+		jiraTicket = strings.ToUpper(jiraTicket)
 	}
 
 	// Ask for PR title
-	fmt.Println("\nPlease enter the PR title:")
-	titlePrompt := promptui.Prompt{
-		Label: "PR Title",
-	}
-
-	prTitle, err := titlePrompt.Run()
+	prTitle, err := input.GetTextInput("PR Title", "Enter a descriptive title for the pull request")
 	if err != nil {
-		log.Fatal("Failed to get PR title:", err)
-	}
-
-	if strings.TrimSpace(prTitle) == "" {
 		fmt.Println("No PR title provided. Exiting.")
 		return
 	}
@@ -157,6 +128,9 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	fmt.Println(strings.Repeat("=", 60))
 
 	filesystem.CreateWorkspace()
+
+	// Track successful projects for notifications
+	var successfulProjects []config.Project
 
 	// Process each repository: clone → apply changes → commit → PR
 	for _, project := range selectedProjects {
@@ -247,11 +221,17 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 		fmt.Printf("✓ Successfully created PR for %s\n", project.Repo)
 		fmt.Printf("PR URL: %s", string(output))
 
+		// Track successful project for notifications
+		successfulProjects = append(successfulProjects, project)
+
 		// Clean up the cloned repository
 		cleanup()
 	}
 
 	fmt.Println("\nAll repositories have been processed.")
+
+	// Send notifications for successful projects
+	SendNotifications(successfulProjects)
 
 	// Final cleanup - remove the repos directory if it's empty
 	filesystem.DeleteEmptyWorkspace()
