@@ -18,6 +18,7 @@ In order to run Copycat, you need to have the following installed:
   - **Claude CLI** (`claude`) - [Installation guide](https://docs.claude.com/en/docs/claude-code)
   - **Codex** (`codex`)
   - **Qwen** (`qwen`)
+  - **Gemini** (`gemini`)
   - Or any other AI tool configured in `config.yaml`
 
 ### Authentication Setup
@@ -72,7 +73,7 @@ tools:
 - `github.requires_ticket_topic` (optional): Topic that marks repositories as requiring a Jira ticket in PR titles
 - `github.slack_room_topic_prefix` (optional): Topic prefix used to infer the Slack room by stripping the prefix (e.g., `slack-room/eng-tooling` → `eng-tooling`, `slack-room/#eng-tooling` → `#eng-tooling`)
 - `tools`: List of AI tools available in the selector
-  - `name`: Identifier for the tool (used with `--ai-tool` flag)
+  - `name`: Identifier for the tool
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
@@ -234,7 +235,6 @@ copycat/
 4. **Keep Jira tickets handy** for projects requiring a ticket
 5. **Use the editor option** for complex multi-line prompts
 6. **Configure AI tool arguments properly** in `config.yaml` for optimal results
-7. **Try different AI tools** for different types of tasks using the `--ai-tool` flag
 
 ## Examples
 
