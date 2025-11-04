@@ -262,6 +262,3 @@ Rename all instances of the function 'processData' to 'transformData' across the
 - No credentials are stored by Copycat
 - Repository clones are cleaned up after processing
 
-## License
-
-[Add your license information here]
