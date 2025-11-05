@@ -113,19 +113,19 @@ func main() {
 	}
 
 	// Ask user to choose the workflow
-	action, err := input.SelectOption("Choose an action", []string{"Create GitHub Issues", "Perform Changes Locally"})
+	action, err := input.SelectOption("Choose an action", []string{
+		"Perform Changes Locally",
+		"Create GitHub Issues (⚠️ Copilot does not sign commits)",
+	})
 	if err != nil {
 		fmt.Println("Action selection cancelled. Exiting.")
 		return
 	}
 
-	switch action {
-	case "Create GitHub Issues":
-		fmt.Println("\n⚠️  WARNING: The Copilot agent does not sign commits.")
-		fmt.Println("You will need to fix unsigned commits before merging any pull request.")
-		fmt.Println("")
+	switch {
+	case strings.HasPrefix(action, "Create GitHub Issues"):
 		git.CreateGitHubIssues(selectedProjects)
-	case "Perform Changes Locally":
+	case strings.HasPrefix(action, "Perform Changes Locally"):
 		performChangesLocally(selectedProjects, selectedTool)
 	}
 

@@ -206,8 +206,7 @@ func (m projectSelectorModel) View() string {
 			if idx == m.cursor {
 				itemStyle = itemStyle.
 					Foreground(lipgloss.Color("205")).
-					Bold(true).
-					Underline(true)
+					Bold(true)
 			}
 
 			rowItems = append(rowItems, itemStyle.Render(itemText))

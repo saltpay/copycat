@@ -85,8 +85,7 @@ func (m selectorModel) View() string {
 		if i == m.cursor {
 			itemStyle = itemStyle.
 				Foreground(lipgloss.Color("205")).
-				Bold(true).
-				Underline(true)
+				Bold(true)
 			itemText = "> " + itemText
 		} else {
 			itemText = "  " + itemText
