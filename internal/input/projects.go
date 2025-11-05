@@ -11,13 +11,15 @@ import (
 )
 
 type projectSelectorModel struct {
-	projects   []config.Project
-	cursor     int
-	selected   map[int]struct{}
-	confirmed  bool
-	termWidth  int
-	termHeight int
-	quitted    bool
+	projects         []config.Project
+	cursor           int
+	selected         map[int]struct{}
+	confirmed        bool
+	termWidth        int
+	termHeight       int
+	quitted          bool
+	refreshRequested bool
+	syncRequested    bool
 }
 
 func initialModel(projects []config.Project) projectSelectorModel {
@@ -95,6 +97,14 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected[i] = struct{}{}
 				}
 			}
+
+		case "r":
+			m.refreshRequested = true
+			return m, tea.Quit
+
+		case "s":
+			m.syncRequested = true
+			return m, tea.Quit
 
 		case "enter":
 			m.confirmed = true
@@ -212,7 +222,7 @@ func (m projectSelectorModel) View() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(1, 0)
 
-	help := "↑/↓/←/→: navigate • space: toggle • a: toggle all • enter: confirm • q: quit"
+	help := "↑/↓/←/→: navigate • space: toggle • a: toggle all • r: refresh • s: sync topics • enter: confirm • q: quit"
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render(help))
 
@@ -228,22 +238,30 @@ func (m projectSelectorModel) View() string {
 	return b.String()
 }
 
-func SelectProjects(projects []config.Project) ([]config.Project, error) {
+func SelectProjects(projects []config.Project) ([]config.Project, bool, bool, error) {
 	if len(projects) == 0 {
-		return nil, nil
+		return nil, false, false, nil
 	}
 
 	p := tea.NewProgram(initialModel(projects))
 	finalModel, err := p.Run()
 	if err != nil {
-		return nil, err
+		return nil, false, false, err
 	}
 
 	m := finalModel.(projectSelectorModel)
 
+	if m.refreshRequested {
+		return nil, true, false, nil
+	}
+
+	if m.syncRequested {
+		return nil, false, true, nil
+	}
+
 	// User quit without confirming
 	if m.quitted || !m.confirmed {
-		return nil, nil
+		return nil, false, false, nil
 	}
 
 	// Extract selected projects
@@ -252,5 +270,5 @@ func SelectProjects(projects []config.Project) ([]config.Project, error) {
 		selected = append(selected, m.projects[i])
 	}
 
-	return selected, nil
+	return selected, false, false, nil
 }

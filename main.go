@@ -1,7 +1,7 @@
 package main
 
 import (
-	"copycat/internal/slack"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,13 +9,18 @@ import (
 	"strings"
 
 	"copycat/internal/ai"
+	"copycat/internal/cache"
 	"copycat/internal/config"
 	"copycat/internal/filesystem"
 	"copycat/internal/git"
 	"copycat/internal/input"
+	"copycat/internal/slack"
 )
 
-const reposDir = "repos"
+const (
+	reposDir         = "repos"
+	projectCacheFile = ".projects.yaml"
+)
 
 func main() {
 	filesystem.DeleteWorkspace()
@@ -35,35 +40,71 @@ func main() {
 
 	fmt.Printf("\n✓ Using AI tool: %s (%s)\n\n", selectedTool.Name, selectedTool.Command)
 
-	if appConfig.GitHub.AutoDiscoveryTopic != "" {
-		fmt.Printf("\nFetching repositories from %s with topic '%s'...\n", appConfig.GitHub.Organization, appConfig.GitHub.AutoDiscoveryTopic)
-	} else {
-		fmt.Printf("\nFetching all repositories from %s...\n", appConfig.GitHub.Organization)
-	}
-
-	// Fetch repositories dynamically from GitHub
-	projects, err := git.FetchRepositories(appConfig.GitHub)
+	projects, fromCache, err := loadProjectList(appConfig.GitHub)
 	if err != nil {
-		log.Fatal("Failed to fetch repositories:", err)
+		log.Fatal("Failed to load project list:", err)
 	}
 
-	if appConfig.GitHub.AutoDiscoveryTopic != "" {
-		fmt.Printf("✓ Found %d unarchived repositories with topic '%s'\n", len(projects), appConfig.GitHub.AutoDiscoveryTopic)
-	} else {
-		fmt.Printf("✓ Found %d unarchived repositories\n", len(projects))
+	if fromCache {
+		fmt.Printf("\n✓ Loaded %d projects from cache (%s)\n", len(projects), projectCacheFile)
+		fmt.Println("Press 'r' in the selector to refresh from GitHub.")
 	}
 
-	fmt.Println("Project Selector")
-	fmt.Println("================")
+	var selectedProjects []config.Project
 
-	selectedProjects, err := input.SelectProjects(projects)
-	if err != nil {
-		log.Fatal("Project selection failed:", err)
-	}
+	for {
+		fmt.Println("Project Selector")
+		fmt.Println("================")
 
-	if len(selectedProjects) == 0 {
-		fmt.Println("No projects selected. Exiting.")
-		return
+		projectSelections, refreshRequested, syncRequested, err := input.SelectProjects(projects)
+		if err != nil {
+			log.Fatal("Project selection failed:", err)
+		}
+
+		if refreshRequested {
+			fmt.Println("\nRefreshing project list from GitHub...")
+			refreshedProjects, refreshErr := fetchAndCacheProjectList(appConfig.GitHub)
+			if refreshErr != nil {
+				log.Printf("Failed to refresh project list: %v", refreshErr)
+				continue
+			}
+			projects = refreshedProjects
+			continue
+		}
+
+		if syncRequested {
+			fmt.Println("\nSyncing GitHub topics based on cached project metadata...")
+
+			// Reload cache to pick up any external edits before syncing.
+			cachedProjects, cacheErr := cache.LoadProjects(projectCacheFile)
+			if cacheErr == nil && len(cachedProjects) > 0 {
+				projects = cachedProjects
+			} else if cacheErr != nil && !errors.Is(cacheErr, os.ErrNotExist) {
+				log.Printf("Warning: failed to reload project cache: %v", cacheErr)
+			}
+
+			if err := git.SyncTopicsWithCache(projects, appConfig.GitHub); err != nil {
+				log.Printf("Failed to sync topics: %v", err)
+				continue
+			}
+
+			fmt.Println("✓ Topics synced. Fetching latest data from GitHub...")
+			refreshedProjects, refreshErr := fetchAndCacheProjectList(appConfig.GitHub)
+			if refreshErr != nil {
+				log.Printf("Failed to refresh project list after sync: %v", refreshErr)
+				continue
+			}
+			projects = refreshedProjects
+			continue
+		}
+
+		if len(projectSelections) == 0 {
+			fmt.Println("No projects selected. Exiting.")
+			return
+		}
+
+		selectedProjects = projectSelections
+		break
 	}
 
 	fmt.Println("\nSelected projects:")
@@ -89,6 +130,58 @@ func main() {
 	}
 
 	fmt.Println("\nDone!")
+}
+
+func loadProjectList(githubCfg config.GitHubConfig) ([]config.Project, bool, error) {
+	projects, err := cache.LoadProjects(projectCacheFile)
+	if err == nil {
+		return projects, true, nil
+	}
+
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Println("No project cache found. Fetching project list from GitHub...")
+	} else {
+		log.Printf("Failed to load project cache %s: %v. Fetching from GitHub...", projectCacheFile, err)
+	}
+
+	projects, err = fetchAndCacheProjectList(githubCfg)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return projects, false, nil
+}
+
+func fetchAndCacheProjectList(githubCfg config.GitHubConfig) ([]config.Project, error) {
+	if githubCfg.AutoDiscoveryTopic != "" {
+		fmt.Printf("\nFetching repositories from %s with topic '%s'...\n", githubCfg.Organization, githubCfg.AutoDiscoveryTopic)
+	} else {
+		fmt.Printf("\nFetching all repositories from %s...\n", githubCfg.Organization)
+	}
+
+	projects, err := git.FetchRepositories(githubCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if githubCfg.AutoDiscoveryTopic != "" {
+		fmt.Printf("✓ Found %d unarchived repositories with topic '%s'\n", len(projects), githubCfg.AutoDiscoveryTopic)
+	} else {
+		fmt.Printf("✓ Found %d unarchived repositories\n", len(projects))
+	}
+
+	if err := cache.SaveProjects(projectCacheFile, projects); err != nil {
+		log.Printf("Failed to update project cache: %v", err)
+	} else {
+		fmt.Printf("✓ Updated project cache at %s\n", projectCacheFile)
+	}
+
+	mergedProjects, err := cache.LoadProjects(projectCacheFile)
+	if err != nil {
+		return projects, nil
+	}
+
+	return mergedProjects, nil
 }
 
 func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool) {

@@ -17,10 +17,17 @@ type textInputModel struct {
 }
 
 func initialTextInputModel(title, placeholder string) textInputModel {
+	return initialTextInputModelWithLimit(title, placeholder, 256)
+}
+
+func initialTextInputModelWithLimit(title, placeholder string, charLimit int) textInputModel {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.Focus()
-	ti.CharLimit = 256
+	if charLimit <= 0 {
+		charLimit = 256
+	}
+	ti.CharLimit = charLimit
 	ti.Width = 80
 
 	return textInputModel{
@@ -88,7 +95,12 @@ func (m textInputModel) View() string {
 
 // GetTextInput prompts the user to enter text
 func GetTextInput(title, placeholder string) (string, error) {
-	p := tea.NewProgram(initialTextInputModel(title, placeholder))
+	return GetTextInputWithLimit(title, placeholder, 256)
+}
+
+// GetTextInputWithLimit prompts the user to enter text with a custom character limit
+func GetTextInputWithLimit(title, placeholder string, charLimit int) (string, error) {
+	p := tea.NewProgram(initialTextInputModelWithLimit(title, placeholder, charLimit))
 	finalModel, err := p.Run()
 	if err != nil {
 		return "", err

@@ -23,3 +23,6 @@
 log/
 logs/
 .vscode/
+
+### Projects cache ###
+.projects.yaml
