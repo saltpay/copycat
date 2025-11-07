@@ -126,7 +126,7 @@ func main() {
 	case strings.HasPrefix(action, "Create GitHub Issues"):
 		git.CreateGitHubIssues(selectedProjects)
 	case strings.HasPrefix(action, "Perform Changes Locally"):
-		performChangesLocally(selectedProjects, selectedTool)
+		performChangesLocally(selectedProjects, selectedTool, *appConfig)
 	}
 
 	fmt.Println("\nDone!")
@@ -184,7 +184,7 @@ func fetchAndCacheProjectList(githubCfg config.GitHubConfig) ([]config.Project, 
 	return mergedProjects, nil
 }
 
-func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool) {
+func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config) {
 	// ============================================================
 	// STEP 1: Collect all user inputs BEFORE any cloning/changes
 	// ============================================================
@@ -256,8 +256,8 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
 			fmt.Printf("\nCloning %s...\n", project.Repo)
 
-			// Use SSH URL for cloning
-			repoURL := fmt.Sprintf("git@github.com:saltpay/%s.git", project.Repo)
+			// Use SSH URL for cloning with the configured organization
+			repoURL := fmt.Sprintf("git@github.com:%s/%s.git", appConfig.GitHub.Organization, project.Repo)
 
 			cmd := exec.Command("git", "clone", repoURL, targetPath)
 			output, err := cmd.CombinedOutput()

@@ -64,10 +64,17 @@ func FetchRepositories(githubCfg config.GitHubConfig) ([]config.Project, error) 
 			}
 		}
 
+		// Extract topic names from repository topics
+		var topics []string
+		for _, topic := range repo.RepositoryTopics {
+			topics = append(topics, topic.Topic)
+		}
+
 		project := config.Project{
 			Repo:           repo.Name,
 			SlackRoom:      slackRoom,
 			RequiresTicket: requiresTicket,
+			Topics:         topics,
 		}
 		projects = append(projects, project)
 	}

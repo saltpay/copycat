@@ -117,8 +117,12 @@ func computeTopicChanges(existing []string, project config.Project, githubCfg co
 		existingSet[topic] = struct{}{}
 	}
 
+	// System-managed topics that should be tracked separately from project topics
+	systemTopics := make(map[string]struct{})
+
 	discoveryTopic := strings.TrimSpace(githubCfg.AutoDiscoveryTopic)
 	if discoveryTopic != "" {
+		systemTopics[discoveryTopic] = struct{}{}
 		if _, hasTopic := existingSet[discoveryTopic]; !hasTopic {
 			addTopics = append(addTopics, discoveryTopic)
 		}
@@ -126,6 +130,7 @@ func computeTopicChanges(existing []string, project config.Project, githubCfg co
 
 	requiresTopic := strings.TrimSpace(githubCfg.RequiresTicketTopic)
 	if requiresTopic != "" {
+		systemTopics[requiresTopic] = struct{}{}
 		_, hasTopic := existingSet[requiresTopic]
 		if project.RequiresTicket && !hasTopic {
 			addTopics = append(addTopics, requiresTopic)
@@ -150,6 +155,7 @@ func computeTopicChanges(existing []string, project config.Project, githubCfg co
 		hasTarget := false
 		for _, topic := range existing {
 			if strings.HasPrefix(topic, slackPrefix) {
+				systemTopics[topic] = struct{}{}
 				if targetSlackTopic == "" || topic != targetSlackTopic {
 					removeTopics = append(removeTopics, topic)
 				}
@@ -161,6 +167,39 @@ func computeTopicChanges(existing []string, project config.Project, githubCfg co
 
 		if targetSlackTopic != "" && !hasTarget {
 			addTopics = append(addTopics, targetSlackTopic)
+		}
+	}
+
+	// Handle project-specific topics (from the cached project's Topics field)
+	projectTopicsSet := make(map[string]struct{}, len(project.Topics))
+	for _, topic := range project.Topics {
+		if topic != "" {
+			projectTopicsSet[topic] = struct{}{}
+		}
+	}
+
+	// Add topics that are in the project but not in GitHub
+	for topic := range projectTopicsSet {
+		if _, exists := existingSet[topic]; !exists {
+			// Only add if it's not a system-managed topic
+			if _, isSystemTopic := systemTopics[topic]; !isSystemTopic {
+				addTopics = append(addTopics, topic)
+			}
+		}
+	}
+
+	// If the project explicitly defines its Topics field (not nil),
+	// manage those topics by removing any non-system topics that aren't in the project.
+	// The project.Topics field is managed if it's not nil or empty.
+	if project.Topics != nil {
+		for _, topic := range existing {
+			_, isProjectTopic := projectTopicsSet[topic]
+			_, isSystemTopic := systemTopics[topic]
+
+			// Remove if it's not a project topic and not a system topic
+			if !isProjectTopic && !isSystemTopic {
+				removeTopics = append(removeTopics, topic)
+			}
 		}
 	}
 

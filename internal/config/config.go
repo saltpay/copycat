@@ -9,9 +9,10 @@ import (
 )
 
 type Project struct {
-	Repo           string `yaml:"repo"`
-	SlackRoom      string `yaml:"slack_room"`
-	RequiresTicket bool   `yaml:"requires_ticket"`
+	Repo           string   `yaml:"repo"`
+	SlackRoom      string   `yaml:"slack_room"`
+	RequiresTicket bool     `yaml:"requires_ticket"`
+	Topics         []string `yaml:"topics,omitempty"`
 }
 
 type GitHubConfig struct {
