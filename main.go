@@ -2,11 +2,13 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"copycat/internal/ai"
 	"copycat/internal/cache"
@@ -22,7 +24,64 @@ const (
 	projectCacheFile = ".projects.yaml"
 )
 
+// SafeLogger provides thread-safe logging for parallel operations
+type SafeLogger struct {
+	mu sync.Mutex
+}
+
+// Printf prints formatted output in a thread-safe manner
+func (sl *SafeLogger) Printf(format string, args ...interface{}) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	fmt.Printf(format, args...)
+}
+
+// Println prints a line in a thread-safe manner
+func (sl *SafeLogger) Println(args ...interface{}) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	fmt.Println(args...)
+}
+
+// LogError logs an error in a thread-safe manner
+func (sl *SafeLogger) LogError(format string, args ...interface{}) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+	log.Printf(format, args...)
+}
+
+var safeLogger = &SafeLogger{}
+
+// ProcessJob represents a single project processing job
+type ProcessJob struct {
+	Project        config.Project
+	AITool         *config.AITool
+	AppConfig      config.Config
+	JiraTicket     string
+	PRTitle        string
+	VibeCodePrompt string
+}
+
+// ProcessResult represents the result of processing a single project
+type ProcessResult struct {
+	Project config.Project
+	Success bool
+	Error   error
+}
+
 func main() {
+	// Parse command-line flags
+	parallelism := flag.Int("parallel", 3, "number of repositories to process in parallel (default: 3)")
+	flag.Parse()
+
+	// Validate parallelism value
+	if *parallelism < 1 {
+		log.Fatal("Parallelism must be at least 1")
+	}
+	if *parallelism > 10 {
+		fmt.Printf("⚠️  Warning: High parallelism (%d) may cause API rate limiting issues\n", *parallelism)
+	}
+
 	filesystem.DeleteWorkspace()
 
 	// Load combined configuration
@@ -126,7 +185,7 @@ func main() {
 	case strings.HasPrefix(action, "Create GitHub Issues"):
 		git.CreateGitHubIssues(selectedProjects)
 	case strings.HasPrefix(action, "Perform Changes Locally"):
-		performChangesLocally(selectedProjects, selectedTool, *appConfig)
+		performChangesLocally(selectedProjects, selectedTool, *appConfig, *parallelism)
 	}
 
 	fmt.Println("\nDone!")
@@ -184,7 +243,106 @@ func fetchAndCacheProjectList(githubCfg config.GitHubConfig) ([]config.Project, 
 	return mergedProjects, nil
 }
 
-func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config) {
+// processProject handles the processing of a single project
+func processProject(job ProcessJob) ProcessResult {
+	project := job.Project
+	targetPath := fmt.Sprintf("%s/%s", reposDir, project.Repo)
+
+	// Add project name prefix for parallel logging
+	logPrefix := fmt.Sprintf("[%s] ", project.Repo)
+
+	safeLogger.Printf("\n%s════════════════════════════════════════\n", logPrefix)
+	safeLogger.Printf("%sProcessing %s\n", logPrefix, project.Repo)
+	safeLogger.Printf("%s════════════════════════════════════════\n", logPrefix)
+
+	// Helper function to clean-up before continuing
+	cleanup := func() {
+		filesystem.DeleteDirectory(targetPath)
+	}
+
+	// Clone the repository if it doesn't exist
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+		safeLogger.Printf("\n%sCloning %s...\n", logPrefix, project.Repo)
+
+		// Use SSH URL for cloning with the configured organization
+		repoURL := fmt.Sprintf("git@github.com:%s/%s.git", job.AppConfig.GitHub.Organization, project.Repo)
+
+		cmd := exec.Command("git", "clone", repoURL, targetPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			safeLogger.LogError("%sFailed to clone %s: %v\nOutput: %s", logPrefix, project.Repo, err, string(output))
+			return ProcessResult{Project: project, Success: false, Error: err}
+		}
+		safeLogger.Printf("%s✓ Successfully cloned %s\n", logPrefix, project.Repo)
+	} else {
+		safeLogger.Printf("%s✓ Repository %s already exists, using existing clone\n", logPrefix, project.Repo)
+	}
+
+	// Check for existing copycat branches
+	branchName, err := git.SelectOrCreateBranch(targetPath, job.PRTitle)
+	if err != nil {
+		safeLogger.LogError("%sFailed to select/create branch in %s: %v", logPrefix, project.Repo, err)
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	safeLogger.Printf("%sUsing branch: %s\n", logPrefix, branchName)
+
+	aiOutput, err := ai.VibeCode(job.AITool, job.VibeCodePrompt, targetPath)
+	if err != nil {
+		safeLogger.LogError("%sFailed to run AI tool on %s: %v\nOutput: %s", logPrefix, project.Repo, err, aiOutput)
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	safeLogger.Printf("%s%s completed the changes.\n", logPrefix, job.AITool.Name)
+
+	prDescription, err := ai.GeneratePRDescription(job.AITool, project, aiOutput, targetPath)
+	if err != nil {
+		safeLogger.LogError("%sFailed to generate PR description for %s: %v\nOutput: %s", logPrefix, project.Repo, err, prDescription)
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	// Check if there are changes to commit
+	output, err := git.CheckLocalChanges(targetPath)
+	if err != nil {
+		safeLogger.LogError("%sFailed to check git status in %s: %v", logPrefix, project.Repo, err)
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	if len(output) == 0 {
+		safeLogger.Printf("%sNo changes detected in %s, skipping PR creation\n", logPrefix, project.Repo)
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("no changes detected")}
+	}
+
+	err = git.PushChanges(project, targetPath, branchName, job.PRTitle)
+	if err != nil {
+		safeLogger.LogError("%sFailed to push changes in %s: %v", logPrefix, project.Repo, err)
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	output, err = git.CreatePullRequest(project, targetPath, branchName, job.PRTitle, job.JiraTicket, prDescription)
+
+	if err != nil {
+		safeLogger.LogError("%sFailed to create PR for %s: %v\nOutput: %s", logPrefix, project.Repo, err, string(output))
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	safeLogger.Printf("%s✓ Successfully created PR for %s\n", logPrefix, project.Repo)
+	safeLogger.Printf("%sPR URL: %s", logPrefix, string(output))
+
+	// Clean up the cloned repository
+	cleanup()
+
+	return ProcessResult{Project: project, Success: true, Error: nil}
+}
+
+func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config, parallelism int) {
 	// ============================================================
 	// STEP 1: Collect all user inputs BEFORE any cloning/changes
 	// ============================================================
@@ -231,108 +389,96 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	// ============================================================
 
 	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("All inputs collected! Starting repository processing...")
+	fmt.Printf("All inputs collected! Starting repository processing with parallelism=%d...\n", parallelism)
 	fmt.Println(strings.Repeat("=", 60))
 
 	filesystem.CreateWorkspace()
 
-	// Track successful projects for notifications
-	var successfulProjects []config.Project
+	// Check if we should run sequentially (parallelism = 1)
+	if parallelism == 1 {
+		// Sequential processing (maintain existing behavior)
+		var successfulProjects []config.Project
 
-	// Process each repository: clone → apply changes → commit → PR
-	for _, project := range selectedProjects {
-		targetPath := fmt.Sprintf("%s/%s", reposDir, project.Repo)
-
-		fmt.Printf("\n════════════════════════════════════════\n")
-		fmt.Printf("Processing %s\n", project.Repo)
-		fmt.Printf("════════════════════════════════════════\n")
-
-		// Helper function to clean-up before continuing
-		cleanup := func() {
-			filesystem.DeleteDirectory(targetPath)
-		}
-
-		// Clone the repository if it doesn't exist
-		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-			fmt.Printf("\nCloning %s...\n", project.Repo)
-
-			// Use SSH URL for cloning with the configured organization
-			repoURL := fmt.Sprintf("git@github.com:%s/%s.git", appConfig.GitHub.Organization, project.Repo)
-
-			cmd := exec.Command("git", "clone", repoURL, targetPath)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				log.Printf("Failed to clone %s: %v\nOutput: %s", project.Repo, err, string(output))
-				continue
+		for _, project := range selectedProjects {
+			job := ProcessJob{
+				Project:        project,
+				AITool:         aiTool,
+				AppConfig:      appConfig,
+				JiraTicket:     jiraTicket,
+				PRTitle:        prTitle,
+				VibeCodePrompt: vibeCodePrompt,
 			}
-			fmt.Printf("✓ Successfully cloned %s\n", project.Repo)
-		} else {
-			fmt.Printf("✓ Repository %s already exists, using existing clone\n", project.Repo)
+
+			result := processProject(job)
+			if result.Success {
+				successfulProjects = append(successfulProjects, result.Project)
+			}
 		}
 
-		// Check for existing copycat branches
-		branchName, err := git.SelectOrCreateBranch(targetPath, prTitle)
-		if err != nil {
-			log.Printf("Failed to select/create branch in %s: %v", project.Repo, err)
-			cleanup()
-			continue
+		fmt.Println("\nAll repositories have been processed.")
+		slack.SendNotifications(successfulProjects)
+		filesystem.DeleteEmptyWorkspace()
+		return
+	}
+
+	// Parallel processing with worker pool
+	numWorkers := parallelism
+	if numWorkers > len(selectedProjects) {
+		numWorkers = len(selectedProjects)
+	}
+
+	// Create channels for job distribution and result collection
+	jobs := make(chan ProcessJob, len(selectedProjects))
+	results := make(chan ProcessResult, len(selectedProjects))
+
+	// Start worker goroutines
+	var wg sync.WaitGroup
+	for w := 1; w <= numWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for job := range jobs {
+				safeLogger.Printf("[Worker %d] Starting %s\n", workerID, job.Project.Repo)
+				result := processProject(job)
+				results <- result
+				if result.Success {
+					safeLogger.Printf("[Worker %d] ✓ Completed %s successfully\n", workerID, job.Project.Repo)
+				} else {
+					safeLogger.Printf("[Worker %d] ⚠ Failed to process %s: %v\n", workerID, job.Project.Repo, result.Error)
+				}
+			}
+		}(w)
+	}
+
+	// Queue all jobs
+	for _, project := range selectedProjects {
+		jobs <- ProcessJob{
+			Project:        project,
+			AITool:         aiTool,
+			AppConfig:      appConfig,
+			JiraTicket:     jiraTicket,
+			PRTitle:        prTitle,
+			VibeCodePrompt: vibeCodePrompt,
 		}
+	}
+	close(jobs)
 
-		fmt.Printf("Using branch: %s\n", branchName)
+	// Start a goroutine to collect results
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
-		aiOutput, err := ai.VibeCode(aiTool, vibeCodePrompt, targetPath)
-		if err != nil {
-			log.Printf("Failed to run AI tool on %s: %v\nOutput: %s", project.Repo, err, aiOutput)
-			cleanup()
-			continue
+	// Collect results
+	var successfulProjects []config.Project
+	var mu sync.Mutex
+
+	for result := range results {
+		mu.Lock()
+		if result.Success {
+			successfulProjects = append(successfulProjects, result.Project)
 		}
-
-		fmt.Printf("%s completed the changes.\n", aiTool.Name)
-
-		prDescription, err := ai.GeneratePRDescription(aiTool, project, aiOutput, targetPath)
-		if err != nil {
-			log.Printf("Failed to generate PR description for %s: %v\nOutput: %s", project.Repo, err, prDescription)
-			cleanup()
-			continue
-		}
-
-		// Check if there are changes to commit
-		output, err := git.CheckLocalChanges(targetPath)
-		if err != nil {
-			log.Printf("Failed to check git status in %s: %v", project.Repo, err)
-			cleanup()
-			continue
-		}
-
-		if len(output) == 0 {
-			fmt.Printf("No changes detected in %s, skipping PR creation\n", project.Repo)
-			cleanup()
-			continue
-		}
-
-		err = git.PushChanges(project, targetPath, branchName, prTitle)
-		if err != nil {
-			log.Printf("Failed to push changes in %s: %v", project.Repo, err)
-			cleanup()
-			continue
-		}
-
-		output, err = git.CreatePullRequest(project, targetPath, branchName, prTitle, jiraTicket, prDescription)
-
-		if err != nil {
-			log.Printf("Failed to create PR for %s: %v\nOutput: %s", project.Repo, err, string(output))
-			cleanup()
-			continue
-		}
-
-		fmt.Printf("✓ Successfully created PR for %s\n", project.Repo)
-		fmt.Printf("PR URL: %s", string(output))
-
-		// Track successful project for notifications
-		successfulProjects = append(successfulProjects, project)
-
-		// Clean up the cloned repository
-		cleanup()
+		mu.Unlock()
 	}
 
 	fmt.Println("\nAll repositories have been processed.")
