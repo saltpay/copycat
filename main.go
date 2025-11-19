@@ -90,15 +90,6 @@ func main() {
 		log.Fatal("Failed to load configuration:", err)
 	}
 
-	// Interactive AI tool selection
-	selectedTool, err := input.SelectAITool(&appConfig.AIToolsConfig)
-	if err != nil {
-		fmt.Println("AI tool selection cancelled. Exiting.")
-		return
-	}
-
-	fmt.Printf("\n✓ Using AI tool: %s (%s)\n\n", selectedTool.Name, selectedTool.Command)
-
 	projects, fromCache, err := loadProjectList(appConfig.GitHub)
 	if err != nil {
 		log.Fatal("Failed to load project list:", err)
@@ -185,6 +176,15 @@ func main() {
 	case strings.HasPrefix(action, "Create GitHub Issues"):
 		git.CreateGitHubIssues(selectedProjects)
 	case strings.HasPrefix(action, "Perform Changes Locally"):
+		// Interactive AI tool selection (only needed for local changes)
+		selectedTool, err := input.SelectAITool(&appConfig.AIToolsConfig)
+		if err != nil {
+			fmt.Println("AI tool selection cancelled. Exiting.")
+			return
+		}
+
+		fmt.Printf("\n✓ Using AI tool: %s (%s)\n\n", selectedTool.Name, selectedTool.Command)
+
 		performChangesLocally(selectedProjects, selectedTool, *appConfig, *parallelism)
 	}
 
