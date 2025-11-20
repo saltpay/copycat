@@ -190,8 +190,7 @@ func main() {
 		// Branch strategy selection
 		branchStrategy, err := input.SelectOption("Branch strategy?", []string{
 			"Always create new branches",
-			"Reuse if available (auto-select most recent)",
-			"Specify branch name to use/create",
+			"Specify branch name (reuse if exists)",
 		})
 		if err != nil {
 			fmt.Println("Branch strategy selection cancelled. Exiting.")
@@ -205,11 +204,9 @@ func main() {
 				fmt.Println("No branch name provided. Exiting.")
 				return
 			}
-		}
-
-		fmt.Printf("\n✓ Branch strategy: %s\n", branchStrategy)
-		if specifiedBranch != "" {
-			fmt.Printf("✓ Branch name: %s\n", specifiedBranch)
+			fmt.Printf("\n✓ Branch name: %s\n", specifiedBranch)
+		} else {
+			fmt.Printf("\n✓ Branch strategy: %s\n", branchStrategy)
 		}
 
 		performChangesLocally(selectedProjects, selectedTool, *appConfig, *parallelism, branchStrategy, specifiedBranch)
