@@ -2,7 +2,6 @@ package git
 
 import (
 	"copycat/internal/config"
-	"copycat/internal/input"
 	"copycat/internal/util"
 	"fmt"
 	"log"
@@ -60,7 +59,7 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 	return nil
 }
 
-func SelectOrCreateBranch(repoPath, prTitle string) (string, error) {
+func SelectOrCreateBranch(repoPath, prTitle, branchStrategy, specifiedBranch string) (string, error) {
 	// Fetch latest branches from remote
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
@@ -68,87 +67,50 @@ func SelectOrCreateBranch(repoPath, prTitle string) (string, error) {
 		log.Printf("Warning: Failed to fetch from remote: %v", err)
 	}
 
-	// Get all branches (local and remote) that match copycat-*
-	branchCmd := exec.Command("git", "branch", "-a", "--list", "*copycat-*")
-	branchCmd.Dir = repoPath
-	output, err := branchCmd.CombinedOutput()
+	// Handle "Specify branch name" strategy (reuse if exists, create if doesn't)
+	if strings.HasPrefix(branchStrategy, "Specify branch name") {
+		return checkoutOrCreateBranch(repoPath, specifiedBranch)
+	}
+
+	// Handle "Always create new" strategy (default)
+	return createNewBranch(repoPath, prTitle)
+}
+
+// checkoutOrCreateBranch checks out a branch if it exists, or creates it if it doesn't
+func checkoutOrCreateBranch(repoPath, branchName string) (string, error) {
+	// Try to checkout the branch
+	checkoutCmd := exec.Command("git", "checkout", branchName)
+	checkoutCmd.Dir = repoPath
+	output, err := checkoutCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to list branches: %w", err)
-	}
-
-	// Parse the branches
-	var copycatBranches []string
-	if len(output) > 0 {
-		lines := strings.Split(string(output), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			// Remove the "remotes/origin/" prefix if present
-			line = strings.TrimPrefix(line, "remotes/origin/")
-			// Remove asterisk if it's the current branch
-			line = strings.TrimPrefix(line, "* ")
-			// Skip HEAD references
-			if strings.Contains(line, "HEAD") {
-				continue
-			}
-			// Deduplicate
-			exists := false
-			for _, existing := range copycatBranches {
-				if existing == line {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				copycatBranches = append(copycatBranches, line)
-			}
-		}
-	}
-
-	// If there are existing copycat branches, let user choose
-	if len(copycatBranches) > 0 {
-		fmt.Printf("\nFound %d existing copycat branch(es):\n", len(copycatBranches))
-
-		// Add option to create a new branch
-		options := append(copycatBranches, "Create new branch")
-
-		selectedOption, err := input.SelectOption("Select a branch or create a new one", options)
+		// If local checkout fails, try checking out from remote
+		checkoutCmd = exec.Command("git", "checkout", "-b", branchName, fmt.Sprintf("origin/%s", branchName))
+		checkoutCmd.Dir = repoPath
+		output, err = checkoutCmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("branch selection failed: %w", err)
-		}
-
-		// If user selected "Create new branch", we'll fall through to the creation logic
-		if selectedOption != "Create new branch" {
-			selectedBranch := selectedOption
-
-			// Try to checkout the branch
-			checkoutCmd := exec.Command("git", "checkout", selectedBranch)
-			checkoutCmd.Dir = repoPath
-			output, err := checkoutCmd.CombinedOutput()
+			// Branch doesn't exist locally or remotely, create it
+			createCmd := exec.Command("git", "checkout", "-b", branchName)
+			createCmd.Dir = repoPath
+			output, err = createCmd.CombinedOutput()
 			if err != nil {
-				// If local checkout fails, try checking out from remote
-				checkoutCmd = exec.Command("git", "checkout", "-b", selectedBranch, fmt.Sprintf("origin/%s", selectedBranch))
-				checkoutCmd.Dir = repoPath
-				output, err = checkoutCmd.CombinedOutput()
-				if err != nil {
-					return "", fmt.Errorf("failed to checkout branch: %w\nOutput: %s", err, string(output))
-				}
+				return "", fmt.Errorf("failed to create branch: %w\nOutput: %s", err, string(output))
 			}
-
-			// Pull latest changes
-			pullCmd := exec.Command("git", "pull", "origin", selectedBranch)
-			pullCmd.Dir = repoPath
-			if _, err := pullCmd.CombinedOutput(); err != nil {
-				log.Printf("Warning: Failed to pull latest changes: %v", err)
-			}
-
-			return selectedBranch, nil
+			return branchName, nil
 		}
 	}
 
-	// Create a new branch with timestamp and slug
+	// Pull latest changes if branch already existed
+	pullCmd := exec.Command("git", "pull", "origin", branchName)
+	pullCmd.Dir = repoPath
+	if _, err := pullCmd.CombinedOutput(); err != nil {
+		log.Printf("Warning: Failed to pull latest changes: %v", err)
+	}
+
+	return branchName, nil
+}
+
+// createNewBranch creates a new branch with timestamp and slug
+func createNewBranch(repoPath, prTitle string) (string, error) {
 	timestamp := time.Now().Format("20060102-150405")
 	slug := util.CreateSlugFromTitle(prTitle)
 
@@ -162,7 +124,7 @@ func SelectOrCreateBranch(repoPath, prTitle string) (string, error) {
 
 	cmd := exec.Command("git", "checkout", "-b", newBranch)
 	cmd.Dir = repoPath
-	output, err = cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to create branch: %w\nOutput: %s", err, string(output))
 	}
