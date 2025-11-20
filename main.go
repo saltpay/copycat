@@ -54,12 +54,14 @@ var safeLogger = &SafeLogger{}
 
 // ProcessJob represents a single project processing job
 type ProcessJob struct {
-	Project        config.Project
-	AITool         *config.AITool
-	AppConfig      config.Config
-	JiraTicket     string
-	PRTitle        string
-	VibeCodePrompt string
+	Project         config.Project
+	AITool          *config.AITool
+	AppConfig       config.Config
+	JiraTicket      string
+	PRTitle         string
+	VibeCodePrompt  string
+	BranchStrategy  string
+	SpecifiedBranch string
 }
 
 // ProcessResult represents the result of processing a single project
@@ -185,7 +187,32 @@ func main() {
 
 		fmt.Printf("\n✓ Using AI tool: %s (%s)\n\n", selectedTool.Name, selectedTool.Command)
 
-		performChangesLocally(selectedProjects, selectedTool, *appConfig, *parallelism)
+		// Branch strategy selection
+		branchStrategy, err := input.SelectOption("Branch strategy?", []string{
+			"Always create new branches",
+			"Reuse if available (auto-select most recent)",
+			"Specify branch name to use/create",
+		})
+		if err != nil {
+			fmt.Println("Branch strategy selection cancelled. Exiting.")
+			return
+		}
+
+		var specifiedBranch string
+		if strings.HasPrefix(branchStrategy, "Specify branch name") {
+			specifiedBranch, err = input.GetTextInput("Branch name", "Enter the branch name to use/create across all repos")
+			if err != nil || specifiedBranch == "" {
+				fmt.Println("No branch name provided. Exiting.")
+				return
+			}
+		}
+
+		fmt.Printf("\n✓ Branch strategy: %s\n", branchStrategy)
+		if specifiedBranch != "" {
+			fmt.Printf("✓ Branch name: %s\n", specifiedBranch)
+		}
+
+		performChangesLocally(selectedProjects, selectedTool, *appConfig, *parallelism, branchStrategy, specifiedBranch)
 	}
 
 	fmt.Println("\nDone!")
@@ -278,8 +305,8 @@ func processProject(job ProcessJob) ProcessResult {
 		safeLogger.Printf("%s✓ Repository %s already exists, using existing clone\n", logPrefix, project.Repo)
 	}
 
-	// Check for existing copycat branches
-	branchName, err := git.SelectOrCreateBranch(targetPath, job.PRTitle)
+	// Select or create branch based on strategy
+	branchName, err := git.SelectOrCreateBranch(targetPath, job.PRTitle, job.BranchStrategy, job.SpecifiedBranch)
 	if err != nil {
 		safeLogger.LogError("%sFailed to select/create branch in %s: %v", logPrefix, project.Repo, err)
 		cleanup()
@@ -342,7 +369,7 @@ func processProject(job ProcessJob) ProcessResult {
 	return ProcessResult{Project: project, Success: true, Error: nil}
 }
 
-func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config, parallelism int) {
+func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config, parallelism int, branchStrategy string, specifiedBranch string) {
 	// ============================================================
 	// STEP 1: Collect all user inputs BEFORE any cloning/changes
 	// ============================================================
@@ -401,12 +428,14 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 
 		for _, project := range selectedProjects {
 			job := ProcessJob{
-				Project:        project,
-				AITool:         aiTool,
-				AppConfig:      appConfig,
-				JiraTicket:     jiraTicket,
-				PRTitle:        prTitle,
-				VibeCodePrompt: vibeCodePrompt,
+				Project:         project,
+				AITool:          aiTool,
+				AppConfig:       appConfig,
+				JiraTicket:      jiraTicket,
+				PRTitle:         prTitle,
+				VibeCodePrompt:  vibeCodePrompt,
+				BranchStrategy:  branchStrategy,
+				SpecifiedBranch: specifiedBranch,
 			}
 
 			result := processProject(job)
@@ -453,12 +482,14 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	// Queue all jobs
 	for _, project := range selectedProjects {
 		jobs <- ProcessJob{
-			Project:        project,
-			AITool:         aiTool,
-			AppConfig:      appConfig,
-			JiraTicket:     jiraTicket,
-			PRTitle:        prTitle,
-			VibeCodePrompt: vibeCodePrompt,
+			Project:         project,
+			AITool:          aiTool,
+			AppConfig:       appConfig,
+			JiraTicket:      jiraTicket,
+			PRTitle:         prTitle,
+			VibeCodePrompt:  vibeCodePrompt,
+			BranchStrategy:  branchStrategy,
+			SpecifiedBranch: specifiedBranch,
 		}
 	}
 	close(jobs)
