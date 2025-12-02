@@ -34,7 +34,8 @@ func CreatePullRequest(project config.Project, targetPath string, branchName str
 		"--title", finalPRTitle,
 		"--body", prDescription,
 		"--base", defaultBranch,
-		"--head", branchName)
+		"--head", branchName,
+		"--label", "copycat")
 	cmd.Dir = targetPath
 
 	return cmd.CombinedOutput()
