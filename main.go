@@ -418,44 +418,61 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 
 	filesystem.CreateWorkspace()
 
-	// Check if we should run sequentially (parallelism = 1)
-	if parallelism == 1 {
-		// Sequential processing (maintain existing behavior)
-		var successfulProjects []config.Project
-
-		for _, project := range selectedProjects {
-			job := ProcessJob{
-				Project:         project,
-				AITool:          aiTool,
-				AppConfig:       appConfig,
-				JiraTicket:      jiraTicket,
-				PRTitle:         prTitle,
-				VibeCodePrompt:  vibeCodePrompt,
-				BranchStrategy:  branchStrategy,
-				SpecifiedBranch: specifiedBranch,
-			}
-
-			result := processProject(job)
-			if result.Success {
-				successfulProjects = append(successfulProjects, result.Project)
-			}
-		}
-
-		fmt.Println("\nAll repositories have been processed.")
-		slack.SendNotifications(successfulProjects)
-		filesystem.DeleteEmptyWorkspace()
-		return
+	var jobs []ProcessJob
+	for _, project := range selectedProjects {
+		jobs = append(jobs, ProcessJob{
+			Project:         project,
+			AITool:          aiTool,
+			AppConfig:       appConfig,
+			JiraTicket:      jiraTicket,
+			PRTitle:         prTitle,
+			VibeCodePrompt:  vibeCodePrompt,
+			BranchStrategy:  branchStrategy,
+			SpecifiedBranch: specifiedBranch,
+		})
 	}
 
+	// Check if we should run sequentially (parallelism = 1)
+	var successfulProjects []config.Project
+	if parallelism == 1 {
+		successfulProjects = serialProcessing(jobs)
+	} else {
+		successfulProjects = parallelProcessing(jobs, parallelism)
+	}
+
+	fmt.Println("\nAll repositories have been processed.")
+
+	// Send notifications for successful projects
+	slack.SendNotifications(successfulProjects)
+
+	// Final cleanup - remove the repos directory if it's empty
+	filesystem.DeleteEmptyWorkspace()
+}
+
+func serialProcessing(processJobs []ProcessJob) []config.Project {
+	// Sequential processing (maintain existing behavior)
+	var successfulProjects []config.Project
+
+	for _, job := range processJobs {
+		result := processProject(job)
+		if result.Success {
+			successfulProjects = append(successfulProjects, result.Project)
+		}
+	}
+
+	return successfulProjects
+}
+
+func parallelProcessing(processJobs []ProcessJob, parallelism int) []config.Project {
 	// Parallel processing with worker pool
 	numWorkers := parallelism
-	if numWorkers > len(selectedProjects) {
-		numWorkers = len(selectedProjects)
+	if numWorkers > len(processJobs) {
+		numWorkers = len(processJobs)
 	}
 
 	// Create channels for job distribution and result collection
-	jobs := make(chan ProcessJob, len(selectedProjects))
-	results := make(chan ProcessResult, len(selectedProjects))
+	jobs := make(chan ProcessJob, len(processJobs))
+	results := make(chan ProcessResult, len(processJobs))
 
 	// Start worker goroutines
 	var wg sync.WaitGroup
@@ -477,17 +494,8 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	}
 
 	// Queue all jobs
-	for _, project := range selectedProjects {
-		jobs <- ProcessJob{
-			Project:         project,
-			AITool:          aiTool,
-			AppConfig:       appConfig,
-			JiraTicket:      jiraTicket,
-			PRTitle:         prTitle,
-			VibeCodePrompt:  vibeCodePrompt,
-			BranchStrategy:  branchStrategy,
-			SpecifiedBranch: specifiedBranch,
-		}
+	for _, job := range processJobs {
+		jobs <- job
 	}
 	close(jobs)
 
@@ -509,11 +517,5 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 		mu.Unlock()
 	}
 
-	fmt.Println("\nAll repositories have been processed.")
-
-	// Send notifications for successful projects
-	slack.SendNotifications(successfulProjects)
-
-	// Final cleanup - remove the repos directory if it's empty
-	filesystem.DeleteEmptyWorkspace()
+	return successfulProjects
 }
