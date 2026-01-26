@@ -443,7 +443,7 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	fmt.Println("\nAll repositories have been processed.")
 
 	// Send notifications for successful projects
-	slack.SendNotifications(successfulProjects)
+	slack.SendNotifications(successfulProjects, prTitle)
 
 	// Final cleanup - remove the repos directory if it's empty
 	filesystem.DeleteEmptyWorkspace()
