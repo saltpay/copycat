@@ -8,7 +8,19 @@ import (
 	"strings"
 )
 
+// ensureLabelExists creates the 'copycat' label in the repository if it doesn't exist
+func ensureLabelExists(targetPath string) {
+	cmd := exec.Command("gh", "label", "create", "copycat",
+		"--description", "Created by Copycat",
+		"--color", "6f42c1",
+		"--force")
+	cmd.Dir = targetPath
+	_ = cmd.Run()
+}
+
 func CreatePullRequest(project config.Project, targetPath string, branchName string, prTitle string, jiraTicket string, prDescription string) ([]byte, error) {
+	ensureLabelExists(targetPath)
+
 	// Get the default branch for this repository
 	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short")
 	cmd.Dir = targetPath
