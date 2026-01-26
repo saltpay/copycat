@@ -8,7 +8,21 @@ import (
 	"strings"
 )
 
+const copycatLabel = "copycat"
+
+func ensureLabelExists(targetPath string) {
+	// Try to create the label - if it already exists, gh will return an error which we ignore
+	cmd := exec.Command("gh", "label", "create", copycatLabel,
+		"--description", "Created by Copycat automation tool",
+		"--color", "7C3AED")
+	cmd.Dir = targetPath
+	_ = cmd.Run() // Ignore error - label may already exist
+}
+
 func CreatePullRequest(project config.Project, targetPath string, branchName string, prTitle string, jiraTicket string, prDescription string) ([]byte, error) {
+	// Ensure the copycat label exists before creating the PR
+	ensureLabelExists(targetPath)
+
 	// Get the default branch for this repository
 	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD", "--short")
 	cmd.Dir = targetPath
@@ -35,7 +49,7 @@ func CreatePullRequest(project config.Project, targetPath string, branchName str
 		"--body", prDescription,
 		"--base", defaultBranch,
 		"--head", branchName,
-		"--label", "copycat")
+		"--label", copycatLabel)
 	cmd.Dir = targetPath
 
 	return cmd.CombinedOutput()
