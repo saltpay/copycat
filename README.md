@@ -92,6 +92,28 @@ go build -o copycat
 ./copycat
 ```
 
+### Slack Notifications
+
+Copycat can send Slack notifications to inform teams when PRs are created for their repositories. To enable this feature, set the `SLACK_BOT_TOKEN` environment variable:
+
+```bash
+# Run with Slack notifications enabled
+SLACK_BOT_TOKEN=xoxb-your-bot-token go run main.go
+
+# Or export for the session
+export SLACK_BOT_TOKEN=xoxb-your-bot-token
+go run main.go
+```
+
+**Requirements:**
+- A Slack app with the `chat:write` scope
+- The bot must be invited to channels where it will post
+
+**Behavior:**
+- If `SLACK_BOT_TOKEN` is not set, Slack notifications are skipped entirely
+- Notifications are grouped by Slack channel (one message per channel)
+- You will be prompted to confirm before sending notifications
+
 ### Workflow Options
 
 Copycat offers two main workflows:
