@@ -25,6 +25,7 @@ func ReadAIPrompt(aiTool *config.AITool) string {
 		if err != nil {
 			log.Fatal("Failed to read prompt:", err)
 		}
+		fmt.Printf("\n%s prompt: %s\n", aiTool.Name, prompt)
 		return prompt
 	}
 
@@ -67,5 +68,7 @@ func ReadAIPrompt(aiTool *config.AITool) string {
 		log.Fatal("Failed to read prompt from temp file:", err)
 	}
 
-	return strings.TrimSpace(string(content))
+	prompt := strings.TrimSpace(string(content))
+	fmt.Printf("\n%s prompt:\n%s\n", aiTool.Name, prompt)
+	return prompt
 }
