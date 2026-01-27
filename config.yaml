@@ -9,9 +9,11 @@ tools:
   - name: claude
     command: claude
     code_args:
+      - --print
       - --permission-mode
       - acceptEdits
-    summary_args: []
+    summary_args:
+      - --print
   - name: codex
     command: codex
     code_args:
