@@ -42,7 +42,6 @@ github:
   organization: saltpay
   auto_discovery_topic: copycat-subject
   requires_ticket_topic: requires-ticket
-  slack_room_topic_prefix: slack-room/
 
 tools:
   - name: claude
@@ -71,14 +70,13 @@ tools:
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
 - `github.requires_ticket_topic` (optional): Topic that marks repositories as requiring a Jira ticket in PR titles
-- `github.slack_room_topic_prefix` (optional): Topic prefix used to infer the Slack room by stripping the prefix (e.g., `slack-room/eng-tooling` → `eng-tooling`, `slack-room/#eng-tooling` → `#eng-tooling`)
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
 
-When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Any repository that also has the configured `requires_ticket_topic` is treated as requiring a Jira ticket in the PR title. If a repository includes a topic that starts with `slack_room_topic_prefix`, Copycat sends notifications to the derived Slack channel.
+When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Any repository that also has the configured `requires_ticket_topic` is treated as requiring a Jira ticket in the PR title. Slack channels for notifications are configured per-project in the `.projects.yaml` cache file (see Slack Notifications section).
 
 ## Usage
 

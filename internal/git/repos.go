@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
 )
 
 // GitHubRepo represents the JSON response from gh repo list
@@ -47,20 +46,11 @@ func FetchRepositories(githubCfg config.GitHubConfig) ([]config.Project, error) 
 	var projects []config.Project
 	for _, repo := range repos {
 		requiresTicket := false
-		slackRoom := ""
 		for _, t := range repo.RepositoryTopics {
 			name := t.Topic
 			if githubCfg.RequiresTicketTopic != "" && name == githubCfg.RequiresTicketTopic {
 				requiresTicket = true
-			}
-			if slackRoom == "" && githubCfg.SlackRoomTopicPrefix != "" && strings.HasPrefix(name, githubCfg.SlackRoomTopicPrefix) {
-				channel := strings.TrimPrefix(name, githubCfg.SlackRoomTopicPrefix)
-				if channel != "" {
-					if !strings.HasPrefix(channel, "#") {
-						channel = "#" + channel
-					}
-					slackRoom = channel
-				}
+				break
 			}
 		}
 
@@ -72,7 +62,6 @@ func FetchRepositories(githubCfg config.GitHubConfig) ([]config.Project, error) 
 
 		project := config.Project{
 			Repo:           repo.Name,
-			SlackRoom:      slackRoom,
 			RequiresTicket: requiresTicket,
 			Topics:         topics,
 		}
