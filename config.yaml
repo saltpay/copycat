@@ -3,7 +3,6 @@ github:
   # comment auto_discovery_topic to fetch all repos
   auto_discovery_topic: copycat
   requires_ticket_topic: requires-ticket
-  slack_room_topic_prefix: slack-
 
 tools:
   - name: claude

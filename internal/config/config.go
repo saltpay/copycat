@@ -16,10 +16,9 @@ type Project struct {
 }
 
 type GitHubConfig struct {
-	Organization         string `yaml:"organization"`
-	AutoDiscoveryTopic   string `yaml:"auto_discovery_topic"`
-	RequiresTicketTopic  string `yaml:"requires_ticket_topic"`
-	SlackRoomTopicPrefix string `yaml:"slack_room_topic_prefix"`
+	Organization        string `yaml:"organization"`
+	AutoDiscoveryTopic  string `yaml:"auto_discovery_topic"`
+	RequiresTicketTopic string `yaml:"requires_ticket_topic"`
 }
 
 type Config struct {

@@ -19,7 +19,6 @@ type projectSelectorModel struct {
 	termHeight       int
 	quitted          bool
 	refreshRequested bool
-	syncRequested    bool
 	// Filter fields
 	filterMode       bool
 	filterText       string
@@ -274,10 +273,6 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshRequested = true
 				return m, tea.Quit
 
-			case "s":
-				m.syncRequested = true
-				return m, tea.Quit
-
 			case "enter":
 				m.confirmed = true
 				return m, tea.Quit
@@ -300,7 +295,7 @@ func (m projectSelectorModel) filterProjectsByTopic(filterText string) []config.
 
 	var filtered []config.Project
 	filterTextLower := strings.ToLower(strings.TrimSpace(filterText))
-	
+
 	// Split filter text by spaces to allow multiple search terms (OR match - any term can match)
 	terms := strings.Fields(filterTextLower)
 
@@ -319,7 +314,7 @@ func (m projectSelectorModel) filterProjectsByTopic(filterText string) []config.
 				break // Found a match, no need to check other terms
 			}
 		}
-		
+
 		if anyTermMatches {
 			filtered = append(filtered, project)
 		}
@@ -478,7 +473,7 @@ func (m projectSelectorModel) View() string {
 	if m.filterMode {
 		help = "Type to filter by topic • matching projects auto-selected • esc: clear filter • enter: exit filter • ↑/↓/←/→: navigate • space: toggle selection • a: select/deselect all • ctrl+c: quit"
 	} else {
-		help = "f: filter by topic • ↑/↓/←/→: navigate • space: toggle • a: toggle all • r: refresh • s: sync topics • enter: confirm • q: quit"
+		help = "f: filter by topic • ↑/↓/←/→: navigate • space: toggle • a: toggle all • r: refresh • enter: confirm • q: quit"
 	}
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render(help))
@@ -500,30 +495,26 @@ func (m projectSelectorModel) View() string {
 	return b.String()
 }
 
-func SelectProjects(projects []config.Project) ([]config.Project, bool, bool, error) {
+func SelectProjects(projects []config.Project) ([]config.Project, bool, error) {
 	if len(projects) == 0 {
-		return nil, false, false, nil
+		return nil, false, nil
 	}
 
 	p := tea.NewProgram(initialModel(projects))
 	finalModel, err := p.Run()
 	if err != nil {
-		return nil, false, false, err
+		return nil, false, err
 	}
 
 	m := finalModel.(projectSelectorModel)
 
 	if m.refreshRequested {
-		return nil, true, false, nil
-	}
-
-	if m.syncRequested {
-		return nil, false, true, nil
+		return nil, true, nil
 	}
 
 	// User quit without confirming
 	if m.quitted || !m.confirmed {
-		return nil, false, false, nil
+		return nil, false, nil
 	}
 
 	// Extract selected projects (maintain original order)
@@ -534,5 +525,5 @@ func SelectProjects(projects []config.Project) ([]config.Project, bool, bool, er
 		}
 	}
 
-	return selected, false, false, nil
+	return selected, false, nil
 }

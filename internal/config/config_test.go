@@ -16,10 +16,6 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal("requires ticket topic should be set")
 	}
 
-	if cfg.GitHub.SlackRoomTopicPrefix == "" {
-		t.Fatal("slack room topic prefix should be set")
-	}
-
 	if len(cfg.AIToolsConfig.Tools) == 0 {
 		t.Fatal("expected at least one AI tool")
 	}
