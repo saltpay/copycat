@@ -142,18 +142,18 @@ func TestIsNotFoundResponse(t *testing.T) {
 
 func TestComputeTopicChanges(t *testing.T) {
 	tests := []struct {
-		name          string
-		existing      []string
-		project       config.Project
-		githubCfg     config.GitHubConfig
-		wantAdd       []string
-		wantRemove    []string
-		description   string
+		name        string
+		existing    []string
+		project     config.Project
+		githubCfg   config.GitHubConfig
+		wantAdd     []string
+		wantRemove  []string
+		description string
 	}{
 		{
 			name:     "add auto-discovery topic when missing",
 			existing: []string{},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
+			project:  config.Project{Repo: "service-a"},
 			githubCfg: config.GitHubConfig{
 				AutoDiscoveryTopic: "copycat",
 			},
@@ -164,7 +164,7 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "auto-discovery topic already exists",
 			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
+			project:  config.Project{Repo: "service-a"},
 			githubCfg: config.GitHubConfig{
 				AutoDiscoveryTopic: "copycat",
 			},
@@ -173,111 +173,11 @@ func TestComputeTopicChanges(t *testing.T) {
 			description: "Should not add auto-discovery topic if already present",
 		},
 		{
-			name:     "add requires-ticket topic",
-			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: true},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
-			},
-			wantAdd:     []string{"requires-ticket"},
-			wantRemove:  nil,
-			description: "Should add requires-ticket topic when RequiresTicket is true",
-		},
-		{
-			name:     "remove requires-ticket topic",
-			existing: []string{"copycat", "requires-ticket"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
-			},
-			wantAdd:     nil,
-			wantRemove:  []string{"requires-ticket"},
-			description: "Should remove requires-ticket topic when RequiresTicket is false",
-		},
-		{
-			name:     "add slack room topic",
-			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     []string{"slack-team-alpha"},
-			wantRemove:  nil,
-			description: "Should add slack topic with prefix (# stripped)",
-		},
-		{
-			name:     "update slack room topic",
-			existing: []string{"copycat", "slack-old-channel"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "#new-channel", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     []string{"slack-new-channel"},
-			wantRemove:  []string{"slack-old-channel"},
-			description: "Should replace old slack topic with new one",
-		},
-		{
-			name:     "remove slack topic when slack room is empty",
-			existing: []string{"copycat", "slack-old-channel"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     nil,
-			wantRemove:  []string{"slack-old-channel"},
-			description: "Should remove slack topic when project has no slack room",
-		},
-		{
-			name:     "slack room with # prefix is stripped",
-			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     []string{"slack-team-alpha"},
-			wantRemove:  nil,
-			description: "Should strip # prefix from slack room name",
-		},
-		{
-			name:     "complex scenario with multiple changes",
-			existing: []string{"copycat", "slack-old-channel", "other-topic"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "#new-channel", RequiresTicket: true},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "requires-ticket",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     []string{"requires-ticket", "slack-new-channel"},
-			wantRemove:  []string{"slack-old-channel"},
-			description: "Should handle multiple topic changes at once",
-		},
-		{
-			name:     "no changes needed",
-			existing: []string{"copycat", "requires-ticket", "slack-team-alpha"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: true},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "requires-ticket",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     nil,
-			wantRemove:  nil,
-			description: "Should return empty when all topics are correct",
-		},
-		{
 			name:     "sync project topics - add project topics",
 			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false, Topics: []string{"backend", "golang"}},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend", "golang"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "",
-				SlackRoomTopicPrefix: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     []string{"backend", "golang"},
 			wantRemove:  nil,
@@ -286,11 +186,9 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "sync project topics - remove non-project topics",
 			existing: []string{"copycat", "backend", "golang", "frontend", "vue"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false, Topics: []string{"backend", "golang"}},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend", "golang"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "",
-				SlackRoomTopicPrefix: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     nil,
 			wantRemove:  []string{"frontend", "vue"},
@@ -299,11 +197,9 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "sync project topics - add missing project topics, remove extra topics",
 			existing: []string{"copycat", "frontend", "vue", "old-topic"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false, Topics: []string{"backend", "golang"}},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend", "golang"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "",
-				SlackRoomTopicPrefix: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     []string{"backend", "golang"},
 			wantRemove:  []string{"frontend", "vue", "old-topic"},
@@ -311,12 +207,10 @@ func TestComputeTopicChanges(t *testing.T) {
 		},
 		{
 			name:     "sync project topics - preserve system topics",
-			existing: []string{"copycat", "requires-ticket", "backend", "frontend"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: true, Topics: []string{"backend"}},
+			existing: []string{"copycat", "backend", "frontend"},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "requires-ticket",
-				SlackRoomTopicPrefix: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     nil,
 			wantRemove:  []string{"frontend"},
@@ -325,39 +219,13 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "empty config values",
 			existing: []string{"some-topic"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
+			project:  config.Project{Repo: "service-a"},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "",
-				RequiresTicketTopic:  "",
-				SlackRoomTopicPrefix: "",
+				AutoDiscoveryTopic: "",
 			},
 			wantAdd:     nil,
 			wantRemove:  nil,
 			description: "Should handle empty config values gracefully",
-		},
-		{
-			name:     "whitespace in slack room",
-			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "  #team-alpha  ", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     []string{"slack-team-alpha"},
-			wantRemove:  nil,
-			description: "Should trim whitespace from slack room",
-		},
-		{
-			name:     "multiple slack topics removed",
-			existing: []string{"copycat", "slack-channel-a", "slack-channel-b"},
-			project:  config.Project{Repo: "service-a", SlackRoom: "#new-channel", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				SlackRoomTopicPrefix: "slack-",
-			},
-			wantAdd:     []string{"slack-new-channel"},
-			wantRemove:  []string{"slack-channel-a", "slack-channel-b"},
-			description: "Should remove all old slack topics with matching prefix",
 		},
 	}
 
@@ -390,64 +258,53 @@ func TestSyncTopicsWithCacheEmptyProjects(t *testing.T) {
 
 func TestSyncProjectSpecificTopics(t *testing.T) {
 	tests := []struct {
-		name            string
-		existing        []string
-		project         config.Project
-		githubCfg       config.GitHubConfig
-		expectedAdd     []string
-		expectedRemove  []string
-		description     string
+		name           string
+		existing       []string
+		project        config.Project
+		githubCfg      config.GitHubConfig
+		expectedAdd    []string
+		expectedRemove []string
+		description    string
 	}{
 		{
-			name: "sync project topics exactly",
-			existing: []string{"copycat", "frontend", "old-topic", "backend", "javascript", "slack-team-frontend"},
+			name:     "sync project topics exactly",
+			existing: []string{"copycat", "frontend", "old-topic", "backend", "javascript"},
 			project: config.Project{
-				Repo:      "test-repo",
-				SlackRoom: "#team-backend",
-				Topics:    []string{"backend", "golang", "microservice"},
+				Repo:   "test-repo",
+				Topics: []string{"backend", "golang", "microservice"},
 			},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "requires-ticket",
-				SlackRoomTopicPrefix: "slack-",
+				AutoDiscoveryTopic: "copycat",
 			},
-			expectedAdd:    []string{"golang", "microservice", "slack-team-backend"},
-			expectedRemove: []string{"frontend", "old-topic", "javascript", "slack-team-frontend"},
+			expectedAdd:    []string{"golang", "microservice"},
+			expectedRemove: []string{"frontend", "old-topic", "javascript"},
 			description:    "Should sync project topics exactly, adding missing ones and removing non-project ones",
 		},
 		{
-			name: "project without Topics field (not managed)",
+			name:     "project without Topics field (not managed)",
 			existing: []string{"copycat", "frontend", "old-topic", "backend", "javascript"},
 			project: config.Project{
-				Repo:      "test-repo",
-				SlackRoom: "#team-backend",
-				RequiresTicket: false, // RequiresTicket is false, so won't add requires-ticket
-				Topics:    nil, // Explicitly nil
+				Repo:   "test-repo",
+				Topics: nil, // Explicitly nil
 			},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "requires-ticket",
-				SlackRoomTopicPrefix: "slack-",
+				AutoDiscoveryTopic: "copycat",
 			},
-			expectedAdd:    []string{"slack-team-backend"},
+			expectedAdd:    nil,
 			expectedRemove: []string{}, // Should not remove non-system topics since Topics is nil
 			description:    "Should not manage project-specific topics when Topics field is nil",
 		},
 		{
-			name: "project with empty Topics slice",
+			name:     "project with empty Topics slice",
 			existing: []string{"copycat", "frontend", "old-topic", "backend", "javascript"},
 			project: config.Project{
-				Repo:      "test-repo",
-				SlackRoom: "#team-backend", // This should still add/remove slack topics
-				RequiresTicket: false,      // RequiresTicket is false, so won't add requires-ticket
-				Topics:    []string{},      // Empty but not nil
+				Repo:   "test-repo",
+				Topics: []string{}, // Empty but not nil
 			},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:   "copycat",
-				RequiresTicketTopic:  "requires-ticket",
-				SlackRoomTopicPrefix: "slack-",
+				AutoDiscoveryTopic: "copycat",
 			},
-			expectedAdd:    []string{"slack-team-backend"},
+			expectedAdd:    nil,
 			expectedRemove: []string{"frontend", "old-topic", "backend", "javascript"}, // Remove all non-system topics
 			description:    "Should remove all non-system topics when empty Topics slice is provided",
 		},

@@ -9,17 +9,14 @@ import (
 )
 
 type Project struct {
-	Repo           string   `yaml:"repo"`
-	SlackRoom      string   `yaml:"slack_room"`
-	RequiresTicket bool     `yaml:"requires_ticket"`
-	Topics         []string `yaml:"topics,omitempty"`
+	Repo      string   `yaml:"repo"`
+	SlackRoom string   `yaml:"slack_room"`
+	Topics    []string `yaml:"topics,omitempty"`
 }
 
 type GitHubConfig struct {
-	Organization         string `yaml:"organization"`
-	AutoDiscoveryTopic   string `yaml:"auto_discovery_topic"`
-	RequiresTicketTopic  string `yaml:"requires_ticket_topic"`
-	SlackRoomTopicPrefix string `yaml:"slack_room_topic_prefix"`
+	Organization       string `yaml:"organization"`
+	AutoDiscoveryTopic string `yaml:"auto_discovery_topic"`
 }
 
 type Config struct {

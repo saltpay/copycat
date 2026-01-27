@@ -11,10 +11,9 @@ import (
 )
 
 type cachedProject struct {
-	Repo           string   `yaml:"repo"`
-	SlackRoom      string   `yaml:"slack_room"`
-	RequiresTicket bool     `yaml:"requires_ticket"`
-	Topics         []string `yaml:"topics,omitempty"`
+	Repo      string   `yaml:"repo"`
+	SlackRoom string   `yaml:"slack_room"`
+	Topics    []string `yaml:"topics,omitempty"`
 }
 
 type projectCache struct {
@@ -42,10 +41,9 @@ func LoadProjects(filename string) ([]config.Project, error) {
 		}
 
 		projects[i] = config.Project{
-			Repo:           entry.Repo,
-			SlackRoom:      slackRoom,
-			RequiresTicket: entry.RequiresTicket,
-			Topics:         entry.Topics,
+			Repo:      entry.Repo,
+			SlackRoom: slackRoom,
+			Topics:    entry.Topics,
 		}
 	}
 
@@ -90,7 +88,6 @@ func SaveProjects(filename string, projects []config.Project) error {
 			existing.SlackRoom = "#none"
 		}
 
-		existing.RequiresTicket = project.RequiresTicket
 		existing.Topics = project.Topics
 
 		byRepo[repo] = existing

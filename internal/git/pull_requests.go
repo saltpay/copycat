@@ -18,7 +18,7 @@ func ensureLabelExists(targetPath string) {
 	_ = cmd.Run()
 }
 
-func CreatePullRequest(project config.Project, targetPath string, branchName string, prTitle string, jiraTicket string, prDescription string) ([]byte, error) {
+func CreatePullRequest(project config.Project, targetPath string, branchName string, prTitle string, prDescription string) ([]byte, error) {
 	ensureLabelExists(targetPath)
 
 	// Get the default branch for this repository
@@ -35,15 +35,8 @@ func CreatePullRequest(project config.Project, targetPath string, branchName str
 	// Create PR using GitHub CLI
 	fmt.Printf("Creating pull request...\n")
 
-	// Determine final PR title when Jira ticket was provided
-	// Ignore when the PR title already starts with the Jira ticket
-	finalPRTitle := prTitle
-	if jiraTicket != "" && !strings.HasPrefix(strings.ToUpper(prTitle), jiraTicket) {
-		finalPRTitle = fmt.Sprintf("%s - %s", jiraTicket, prTitle)
-	}
-
 	cmd = exec.Command("gh", "pr", "create",
-		"--title", finalPRTitle,
+		"--title", prTitle,
 		"--body", prDescription,
 		"--base", defaultBranch,
 		"--head", branchName,

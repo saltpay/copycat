@@ -19,13 +19,11 @@ func TestLoadProjects(t *testing.T) {
 			yamlContent: `projects:
   - repo: service-a
     slack_room: "#team-alpha"
-    requires_ticket: true
   - repo: service-b
-    slack_room: "#team-beta"
-    requires_ticket: false`,
+    slack_room: "#team-beta"`,
 			want: []config.Project{
-				{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: true},
-				{Repo: "service-b", SlackRoom: "#team-beta", RequiresTicket: false},
+				{Repo: "service-a", SlackRoom: "#team-alpha"},
+				{Repo: "service-b", SlackRoom: "#team-beta"},
 			},
 			wantErr: false,
 		},
@@ -33,10 +31,9 @@ func TestLoadProjects(t *testing.T) {
 			name: "empty slack room becomes empty string",
 			yamlContent: `projects:
   - repo: service-a
-    slack_room: ""
-    requires_ticket: false`,
+    slack_room: ""`,
 			want: []config.Project{
-				{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
+				{Repo: "service-a", SlackRoom: ""},
 			},
 			wantErr: false,
 		},
@@ -44,10 +41,9 @@ func TestLoadProjects(t *testing.T) {
 			name: "#none slack room becomes empty string",
 			yamlContent: `projects:
   - repo: service-a
-    slack_room: "#none"
-    requires_ticket: false`,
+    slack_room: "#none"`,
 			want: []config.Project{
-				{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
+				{Repo: "service-a", SlackRoom: ""},
 			},
 			wantErr: false,
 		},
@@ -55,10 +51,9 @@ func TestLoadProjects(t *testing.T) {
 			name: "whitespace in slack room is trimmed",
 			yamlContent: `projects:
   - repo: service-a
-    slack_room: "  #team-alpha  "
-    requires_ticket: false`,
+    slack_room: "  #team-alpha  "`,
 			want: []config.Project{
-				{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: false},
+				{Repo: "service-a", SlackRoom: "#team-alpha"},
 			},
 			wantErr: false,
 		},
@@ -104,9 +99,6 @@ func TestLoadProjects(t *testing.T) {
 					if got[i].SlackRoom != tt.want[i].SlackRoom {
 						t.Errorf("LoadProjects() project[%d].SlackRoom = %v, want %v", i, got[i].SlackRoom, tt.want[i].SlackRoom)
 					}
-					if got[i].RequiresTicket != tt.want[i].RequiresTicket {
-						t.Errorf("LoadProjects() project[%d].RequiresTicket = %v, want %v", i, got[i].RequiresTicket, tt.want[i].RequiresTicket)
-					}
 				}
 			}
 		})
@@ -132,31 +124,27 @@ func TestSaveProjects(t *testing.T) {
 			name:     "save new projects",
 			existing: "",
 			projects: []config.Project{
-				{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: true},
-				{Repo: "service-b", SlackRoom: "", RequiresTicket: false},
+				{Repo: "service-a", SlackRoom: "#team-alpha"},
+				{Repo: "service-b", SlackRoom: ""},
 			},
 			wantContains: []string{
 				"service-a",
 				"#team-alpha",
-				"requires_ticket: true",
 				"service-b",
 				"#none",
-				"requires_ticket: false",
 			},
 		},
 		{
 			name: "merge with existing projects",
 			existing: `projects:
   - repo: service-a
-    slack_room: "#old-channel"
-    requires_ticket: false`,
+    slack_room: "#old-channel"`,
 			projects: []config.Project{
-				{Repo: "service-a", SlackRoom: "#new-channel", RequiresTicket: true},
+				{Repo: "service-a", SlackRoom: "#new-channel"},
 			},
 			wantContains: []string{
 				"service-a",
 				"#new-channel",
-				"requires_ticket: true",
 			},
 			wantNotContain: []string{
 				"#old-channel",
@@ -166,22 +154,20 @@ func TestSaveProjects(t *testing.T) {
 			name: "preserve existing slack room if new is empty",
 			existing: `projects:
   - repo: service-a
-    slack_room: "#existing-channel"
-    requires_ticket: false`,
+    slack_room: "#existing-channel"`,
 			projects: []config.Project{
-				{Repo: "service-a", SlackRoom: "", RequiresTicket: true},
+				{Repo: "service-a", SlackRoom: ""},
 			},
 			wantContains: []string{
 				"service-a",
 				"#existing-channel",
-				"requires_ticket: true",
 			},
 		},
 		{
 			name:     "empty slack room becomes #none",
 			existing: "",
 			projects: []config.Project{
-				{Repo: "service-a", SlackRoom: "", RequiresTicket: false},
+				{Repo: "service-a", SlackRoom: ""},
 			},
 			wantContains: []string{
 				"service-a",
@@ -192,9 +178,9 @@ func TestSaveProjects(t *testing.T) {
 			name:     "projects are sorted alphabetically",
 			existing: "",
 			projects: []config.Project{
-				{Repo: "zebra", SlackRoom: "#z", RequiresTicket: false},
-				{Repo: "alpha", SlackRoom: "#a", RequiresTicket: false},
-				{Repo: "beta", SlackRoom: "#b", RequiresTicket: false},
+				{Repo: "zebra", SlackRoom: "#z"},
+				{Repo: "alpha", SlackRoom: "#a"},
+				{Repo: "beta", SlackRoom: "#b"},
 			},
 			wantContains: []string{
 				"alpha",
@@ -251,8 +237,8 @@ func TestSaveProjectsRoundTrip(t *testing.T) {
 	tmpFile := filepath.Join(tmpDir, "projects.yaml")
 
 	original := []config.Project{
-		{Repo: "service-a", SlackRoom: "#team-alpha", RequiresTicket: true},
-		{Repo: "service-b", SlackRoom: "#team-beta", RequiresTicket: false},
+		{Repo: "service-a", SlackRoom: "#team-alpha"},
+		{Repo: "service-b", SlackRoom: "#team-beta"},
 	}
 
 	// Save
@@ -287,9 +273,6 @@ func TestSaveProjectsRoundTrip(t *testing.T) {
 		if loaded.SlackRoom != orig.SlackRoom {
 			t.Errorf("Round trip repo %q SlackRoom = %q, want %q", orig.Repo, loaded.SlackRoom, orig.SlackRoom)
 		}
-		if loaded.RequiresTicket != orig.RequiresTicket {
-			t.Errorf("Round trip repo %q RequiresTicket = %v, want %v", orig.Repo, loaded.RequiresTicket, orig.RequiresTicket)
-		}
 	}
 }
 
@@ -298,9 +281,9 @@ func TestSaveProjectsSkipsEmptyRepos(t *testing.T) {
 	tmpFile := filepath.Join(tmpDir, "projects.yaml")
 
 	projects := []config.Project{
-		{Repo: "service-a", SlackRoom: "#team", RequiresTicket: false},
-		{Repo: "", SlackRoom: "#ignored", RequiresTicket: true},
-		{Repo: "  ", SlackRoom: "#also-ignored", RequiresTicket: true},
+		{Repo: "service-a", SlackRoom: "#team"},
+		{Repo: "", SlackRoom: "#ignored"},
+		{Repo: "  ", SlackRoom: "#also-ignored"},
 	}
 
 	if err := SaveProjects(tmpFile, projects); err != nil {

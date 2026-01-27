@@ -57,7 +57,6 @@ type ProcessJob struct {
 	Project         config.Project
 	AITool          *config.AITool
 	AppConfig       config.Config
-	JiraTicket      string
 	PRTitle         string
 	VibeCodePrompt  string
 	BranchStrategy  string
@@ -69,6 +68,7 @@ type ProcessResult struct {
 	Project config.Project
 	Success bool
 	Error   error
+	PRURL   string
 }
 
 func main() {
@@ -102,13 +102,16 @@ func main() {
 		fmt.Println("Press 'r' in the selector to refresh from GitHub.")
 	}
 
+	// Warn about projects without slack rooms configured
+	warnProjectsWithoutSlackRoom(projects)
+
 	var selectedProjects []config.Project
 
 	for {
 		fmt.Println("Project Selector")
 		fmt.Println("================")
 
-		projectSelections, refreshRequested, syncRequested, err := input.SelectProjects(projects)
+		projectSelections, refreshRequested, err := input.SelectProjects(projects)
 		if err != nil {
 			log.Fatal("Project selection failed:", err)
 		}
@@ -121,32 +124,7 @@ func main() {
 				continue
 			}
 			projects = refreshedProjects
-			continue
-		}
-
-		if syncRequested {
-			fmt.Println("\nSyncing GitHub topics based on cached project metadata...")
-
-			// Reload cache to pick up any external edits before syncing.
-			cachedProjects, cacheErr := cache.LoadProjects(projectCacheFile)
-			if cacheErr == nil && len(cachedProjects) > 0 {
-				projects = cachedProjects
-			} else if cacheErr != nil && !errors.Is(cacheErr, os.ErrNotExist) {
-				log.Printf("Warning: failed to reload project cache: %v", cacheErr)
-			}
-
-			if err := git.SyncTopicsWithCache(projects, appConfig.GitHub); err != nil {
-				log.Printf("Failed to sync topics: %v", err)
-				continue
-			}
-
-			fmt.Println("✓ Topics synced. Fetching latest data from GitHub...")
-			refreshedProjects, refreshErr := fetchAndCacheProjectList(appConfig.GitHub)
-			if refreshErr != nil {
-				log.Printf("Failed to refresh project list after sync: %v", refreshErr)
-				continue
-			}
-			projects = refreshedProjects
+			warnProjectsWithoutSlackRoom(projects)
 			continue
 		}
 
@@ -213,6 +191,22 @@ func main() {
 	}
 
 	fmt.Println("\nDone!")
+}
+
+func warnProjectsWithoutSlackRoom(projects []config.Project) {
+	var missing []string
+	for _, p := range projects {
+		if strings.TrimSpace(p.SlackRoom) == "" {
+			missing = append(missing, p.Repo)
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Printf("\n⚠️  Warning: %d project(s) have no slack_room configured in %s:\n", len(missing), projectCacheFile)
+		for _, repo := range missing {
+			fmt.Printf("   - %s\n", repo)
+		}
+		fmt.Println()
+	}
 }
 
 func loadProjectList(githubCfg config.GitHubConfig) ([]config.Project, bool, error) {
@@ -349,7 +343,7 @@ func processProject(job ProcessJob) ProcessResult {
 		return ProcessResult{Project: project, Success: false, Error: err}
 	}
 
-	output, err = git.CreatePullRequest(project, targetPath, branchName, job.PRTitle, job.JiraTicket, prDescription)
+	output, err = git.CreatePullRequest(project, targetPath, branchName, job.PRTitle, prDescription)
 
 	if err != nil {
 		safeLogger.LogError("%sFailed to create PR for %s: %v\nOutput: %s", logPrefix, project.Repo, err, string(output))
@@ -357,13 +351,14 @@ func processProject(job ProcessJob) ProcessResult {
 		return ProcessResult{Project: project, Success: false, Error: err}
 	}
 
+	prURL := strings.TrimSpace(string(output))
 	safeLogger.Printf("%s✓ Successfully created PR for %s\n", logPrefix, project.Repo)
-	safeLogger.Printf("%sPR URL: %s", logPrefix, string(output))
+	safeLogger.Printf("%sPR URL: %s\n", logPrefix, prURL)
 
 	// Clean up the cloned repository
 	cleanup()
 
-	return ProcessResult{Project: project, Success: true, Error: nil}
+	return ProcessResult{Project: project, Success: true, Error: nil, PRURL: prURL}
 }
 
 func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config, parallelism int, branchStrategy string, specifiedBranch string) {
@@ -371,29 +366,8 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	// STEP 1: Collect all user inputs BEFORE any cloning/changes
 	// ============================================================
 
-	// Check if any selected projects require a ticket
-	hasProjectsRequiringTicket := false
-	for _, project := range selectedProjects {
-		if project.RequiresTicket {
-			hasProjectsRequiringTicket = true
-			break
-		}
-	}
-
-	// Ask for Jira ticket when required
-	var jiraTicket string
-	if hasProjectsRequiringTicket {
-		fmt.Println("\n⚠️  Note: Some selected projects require a Jira ticket in the PR title.")
-
-		var err error
-		jiraTicket, err = input.GetTextInput("Jira Ticket", "e.g., PROJ-123")
-		if err != nil {
-			fmt.Println("No Jira ticket provided. Exiting.")
-			return
-		}
-
-		jiraTicket = strings.ToUpper(jiraTicket)
-	}
+	// Remind user about ticket/issue in PR title
+	fmt.Println("\n💡 Tip: You may wish to include a ticket or issue reference in the PR title (e.g., PROJ-123 - Title).")
 
 	// Ask for PR title
 	prTitle, err := input.GetTextInput("PR Title", "Enter a descriptive title for the pull request")
@@ -424,7 +398,6 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 			Project:         project,
 			AITool:          aiTool,
 			AppConfig:       appConfig,
-			JiraTicket:      jiraTicket,
 			PRTitle:         prTitle,
 			VibeCodePrompt:  vibeCodePrompt,
 			BranchStrategy:  branchStrategy,
@@ -433,37 +406,46 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	}
 
 	// Check if we should run sequentially (parallelism = 1)
-	var successfulProjects []config.Project
+	var successfulResults []ProcessResult
 	if parallelism == 1 {
-		successfulProjects = serialProcessing(jobs)
+		successfulResults = serialProcessing(jobs)
 	} else {
-		successfulProjects = parallelProcessing(jobs, parallelism)
+		successfulResults = parallelProcessing(jobs, parallelism)
 	}
 
 	fmt.Println("\nAll repositories have been processed.")
 
+	// Build project list and PR URLs map for notifications
+	var successfulProjects []config.Project
+	prURLs := make(map[string]string)
+	for _, result := range successfulResults {
+		successfulProjects = append(successfulProjects, result.Project)
+		if result.PRURL != "" {
+			prURLs[result.Project.Repo] = result.PRURL
+		}
+	}
+
 	// Send notifications for successful projects
-	slack.SendNotifications(successfulProjects, prTitle)
+	slack.SendNotifications(successfulProjects, prTitle, prURLs)
 
 	// Final cleanup - remove the repos directory if it's empty
 	filesystem.DeleteEmptyWorkspace()
 }
 
-func serialProcessing(processJobs []ProcessJob) []config.Project {
-	// Sequential processing (maintain existing behavior)
-	var successfulProjects []config.Project
+func serialProcessing(processJobs []ProcessJob) []ProcessResult {
+	var successfulResults []ProcessResult
 
 	for _, job := range processJobs {
 		result := processProject(job)
 		if result.Success {
-			successfulProjects = append(successfulProjects, result.Project)
+			successfulResults = append(successfulResults, result)
 		}
 	}
 
-	return successfulProjects
+	return successfulResults
 }
 
-func parallelProcessing(processJobs []ProcessJob, parallelism int) []config.Project {
+func parallelProcessing(processJobs []ProcessJob, parallelism int) []ProcessResult {
 	// Parallel processing with worker pool
 	numWorkers := parallelism
 	if numWorkers > len(processJobs) {
@@ -506,16 +488,16 @@ func parallelProcessing(processJobs []ProcessJob, parallelism int) []config.Proj
 	}()
 
 	// Collect results
-	var successfulProjects []config.Project
+	var successfulResults []ProcessResult
 	var mu sync.Mutex
 
 	for result := range results {
 		mu.Lock()
 		if result.Success {
-			successfulProjects = append(successfulProjects, result.Project)
+			successfulResults = append(successfulResults, result)
 		}
 		mu.Unlock()
 	}
 
-	return successfulProjects
+	return successfulResults
 }

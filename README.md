@@ -41,8 +41,6 @@ Copycat reads all settings from a single `config.yaml` file in the project root:
 github:
   organization: saltpay
   auto_discovery_topic: copycat-subject
-  requires_ticket_topic: requires-ticket
-  slack_room_topic_prefix: slack-room/
 
 tools:
   - name: claude
@@ -70,15 +68,13 @@ tools:
 
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
-- `github.requires_ticket_topic` (optional): Topic that marks repositories as requiring a Jira ticket in PR titles
-- `github.slack_room_topic_prefix` (optional): Topic prefix used to infer the Slack room by stripping the prefix (e.g., `slack-room/eng-tooling` → `eng-tooling`, `slack-room/#eng-tooling` → `#eng-tooling`)
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
 
-When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Any repository that also has the configured `requires_ticket_topic` is treated as requiring a Jira ticket in the PR title. If a repository includes a topic that starts with `slack_room_topic_prefix`, Copycat sends notifications to the derived Slack channel.
+When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Slack channels for notifications are configured per-project in the `.projects.yaml` cache file (see Slack Notifications section).
 
 ## Usage
 
@@ -138,9 +134,8 @@ Clones repositories, applies changes using your configured AI coding assistant, 
 **Steps:**
 1. Select repositories from the list (or type "all")
 2. Choose "Perform Changes Locally"
-3. If any selected project includes the configured `requires_ticket_topic`, enter a Jira ticket (e.g., PROJ-123)
-4. Enter PR title
-5. Enter the AI prompt:
+3. Enter PR title (you may include a ticket reference, e.g., `PROJ-123 - Title`)
+4. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter
    - **Editor**: Opens your default editor (set via `$EDITOR` env var, defaults to vim)
 6. Copycat will:
@@ -168,15 +163,14 @@ Example: `copycat-20231015-150405`
 
 ### Pull Request Titles
 
-- **Regular projects**: Uses the PR title you provide
-- **Projects that require a ticket** (repositories tagged with the configured `requires_ticket_topic`): Automatically prepends Jira ticket: `PROJ-123 - Your PR Title`
+Pull requests use the title you provide. You may optionally include a ticket or issue reference (e.g., `PROJ-123 - Your PR Title`).
 
 ## How It Works
 
 ### Local Changes Workflow
 
 1. **Input Collection Phase**
-   - Collects all user inputs upfront (Jira ticket, PR title, AI prompt)
+   - Collects all user inputs upfront (PR title, AI prompt)
    - Validates inputs before processing
 
 2. **Repository Processing Phase**
@@ -254,7 +248,7 @@ copycat/
 1. **Test with a single repository first** before running on all projects
 2. **Use clear, specific prompts** for your AI tool
 3. **Review changes** before merging PRs
-4. **Keep Jira tickets handy** for projects requiring a ticket
+4. **Include ticket references** in PR titles when relevant for tracking
 5. **Use the editor option** for complex multi-line prompts
 6. **Configure AI tool arguments properly** in `config.yaml` for optimal results
 

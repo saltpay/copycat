@@ -128,48 +128,6 @@ func computeTopicChanges(existing []string, project config.Project, githubCfg co
 		}
 	}
 
-	requiresTopic := strings.TrimSpace(githubCfg.RequiresTicketTopic)
-	if requiresTopic != "" {
-		systemTopics[requiresTopic] = struct{}{}
-		_, hasTopic := existingSet[requiresTopic]
-		if project.RequiresTicket && !hasTopic {
-			addTopics = append(addTopics, requiresTopic)
-		}
-		if !project.RequiresTicket && hasTopic {
-			removeTopics = append(removeTopics, requiresTopic)
-		}
-	}
-
-	slackPrefix := strings.TrimSpace(githubCfg.SlackRoomTopicPrefix)
-	if slackPrefix != "" {
-		targetSlackTopic := ""
-		slackRoom := strings.TrimSpace(project.SlackRoom)
-		if slackRoom != "" {
-			slackRoom = strings.TrimPrefix(slackRoom, "#")
-			slackRoom = strings.TrimSpace(slackRoom)
-			if slackRoom != "" {
-				targetSlackTopic = slackPrefix + slackRoom
-			}
-		}
-
-		hasTarget := false
-		for _, topic := range existing {
-			if strings.HasPrefix(topic, slackPrefix) {
-				systemTopics[topic] = struct{}{}
-				if targetSlackTopic == "" || topic != targetSlackTopic {
-					removeTopics = append(removeTopics, topic)
-				}
-				if topic == targetSlackTopic {
-					hasTarget = true
-				}
-			}
-		}
-
-		if targetSlackTopic != "" && !hasTarget {
-			addTopics = append(addTopics, targetSlackTopic)
-		}
-	}
-
 	// Handle project-specific topics (from the cached project's Topics field)
 	projectTopicsSet := make(map[string]struct{}, len(project.Topics))
 	for _, topic := range project.Topics {
