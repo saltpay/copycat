@@ -103,13 +103,16 @@ func main() {
 		fmt.Println("Press 'r' in the selector to refresh from GitHub.")
 	}
 
+	// Warn about projects without slack rooms configured
+	warnProjectsWithoutSlackRoom(projects)
+
 	var selectedProjects []config.Project
 
 	for {
 		fmt.Println("Project Selector")
 		fmt.Println("================")
 
-		projectSelections, refreshRequested, syncRequested, err := input.SelectProjects(projects)
+		projectSelections, refreshRequested, err := input.SelectProjects(projects)
 		if err != nil {
 			log.Fatal("Project selection failed:", err)
 		}
@@ -122,32 +125,7 @@ func main() {
 				continue
 			}
 			projects = refreshedProjects
-			continue
-		}
-
-		if syncRequested {
-			fmt.Println("\nSyncing GitHub topics based on cached project metadata...")
-
-			// Reload cache to pick up any external edits before syncing.
-			cachedProjects, cacheErr := cache.LoadProjects(projectCacheFile)
-			if cacheErr == nil && len(cachedProjects) > 0 {
-				projects = cachedProjects
-			} else if cacheErr != nil && !errors.Is(cacheErr, os.ErrNotExist) {
-				log.Printf("Warning: failed to reload project cache: %v", cacheErr)
-			}
-
-			if err := git.SyncTopicsWithCache(projects, appConfig.GitHub); err != nil {
-				log.Printf("Failed to sync topics: %v", err)
-				continue
-			}
-
-			fmt.Println("✓ Topics synced. Fetching latest data from GitHub...")
-			refreshedProjects, refreshErr := fetchAndCacheProjectList(appConfig.GitHub)
-			if refreshErr != nil {
-				log.Printf("Failed to refresh project list after sync: %v", refreshErr)
-				continue
-			}
-			projects = refreshedProjects
+			warnProjectsWithoutSlackRoom(projects)
 			continue
 		}
 
@@ -214,6 +192,22 @@ func main() {
 	}
 
 	fmt.Println("\nDone!")
+}
+
+func warnProjectsWithoutSlackRoom(projects []config.Project) {
+	var missing []string
+	for _, p := range projects {
+		if strings.TrimSpace(p.SlackRoom) == "" {
+			missing = append(missing, p.Repo)
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Printf("\n⚠️  Warning: %d project(s) have no slack_room configured in %s:\n", len(missing), projectCacheFile)
+		for _, repo := range missing {
+			fmt.Printf("   - %s\n", repo)
+		}
+		fmt.Println()
+	}
 }
 
 func loadProjectList(githubCfg config.GitHubConfig) ([]config.Project, bool, error) {

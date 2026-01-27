@@ -3,8 +3,8 @@ projects:
       slack_room: '#team-foo'
       requires_ticket: false
       topics:
-        - slack-team-foo
         - copycat
         - java
     - repo: bar-service
+      slack_room: '#none'  # Use '#none' to suppress missing slack_room warning
       requires_ticket: true
