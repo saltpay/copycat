@@ -35,34 +35,70 @@ claude auth login
 
 ## Configuration
 
-Copycat reads all settings from a single `config.yaml` file in the project root:
+Copycat stores its configuration in a platform-specific location:
+
+| Platform | Config Path |
+|----------|-------------|
+| Linux | `~/.config/copycat/config.yaml` |
+| macOS | `~/Library/Application Support/copycat/config.yaml` |
+| Windows | `%AppData%/copycat/config.yaml` |
+
+### First Run
+
+On first run, Copycat will guide you through setup:
+
+```
+Welcome to Copycat!
+Configuration now follows XDG structure: ~/Library/Application Support/copycat/config.yaml
+
+Found existing local config files:
+  - config.yaml
+  - .projects.yaml
+
+How would you like to proceed?
+> Migrate existing config
+  Start fresh
+```
+
+If no existing local config is found, you'll be prompted for your GitHub organization.
+
+### Subcommands
+
+```bash
+copycat          # Run the interactive TUI
+copycat edit     # Open config in $EDITOR
+copycat migrate  # Migrate from old local config files
+copycat reset    # Delete configuration and start fresh
+```
+
+### Config File Structure
 
 ```yaml
 github:
-  organization: saltpay
-  auto_discovery_topic: copycat-subject
+  organization: my-org
+  auto_discovery_topic: copycat
   requires_ticket_topic: requires-ticket
 
 tools:
   - name: claude
     command: claude
-    code_args:
-      - --permission-mode
-      - acceptEdits
-    summary_args: []
+    code_args: [--print, --permission-mode, acceptEdits]
+    summary_args: [--print]
   - name: codex
     command: codex
-    code_args:
-      - exec
-      - --full-auto
+    code_args: [exec, --full-auto]
     summary_args: []
-  - name: qwen
-    command: qwen
-    code_args:
-      - --approval-mode
-      - auto-edit
-      - -p
+  - name: gemini
+    command: gemini
+    code_args: [--approval-mode, auto_edit]
     summary_args: []
+
+projects:
+  - repo: service-a
+    slack_room: "#team-a"
+  - repo: service-b
+    slack_room: "#team-b"
+    requires_ticket: true
 ```
 
 ### Configuration Fields
@@ -75,8 +111,12 @@ tools:
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
+- `projects`: List of repositories (synced from GitHub or added manually)
+  - `repo`: Repository name
+  - `slack_room`: Slack channel for notifications (optional)
+  - `requires_ticket`: Whether PRs require a Jira ticket (auto-detected from topics)
 
-When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Any repository that also has the configured `requires_ticket_topic` is treated as requiring a Jira ticket in the PR title. Slack channels for notifications are configured per-project in the `.projects.yaml` cache file (see Slack Notifications section).
+When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub. Any repository with the configured `requires_ticket_topic` is automatically marked as requiring a Jira ticket.
 
 ## Usage
 
@@ -88,6 +128,11 @@ go run main.go
 # Or build and run
 go build -o copycat
 ./copycat
+
+# On first run, you'll be guided through setup
+# Then use subcommands to manage your config:
+./copycat edit     # Edit configuration
+./copycat reset    # Start fresh
 ```
 
 ### Slack Notifications
@@ -111,6 +156,7 @@ go run main.go
 - If `SLACK_BOT_TOKEN` is not set, Slack notifications are skipped entirely
 - Notifications are grouped by Slack channel (one message per channel)
 - You will be prompted to confirm before sending notifications
+- Configure `slack_room` per project in your config file (use `copycat edit`)
 
 ### Workflow Options
 
@@ -198,29 +244,6 @@ Example: `copycat-20231015-150405`
 2. Uses `gh issue create` to create issues
 3. Automatically assigns issues to @copilot
 4. Provides URLs of created issues
-
-## Directory Structure
-
-```
-copycat/
-├── main.go                     # Main application code
-├── config.yaml                 # Combined configuration (GitHub + AI tools)
-├── internal/
-│   ├── ai/
-│   │   └── ai.go              # AI tool integration logic
-│   ├── config/
-│   │   ├── config.go          # Configuration loading
-│   │   └── config_test.go     # Configuration tests
-│   ├── input/
-│   │   └── ai_prompt.go       # User input handling
-│   ├── git/
-│   └── filesystem/
-├── go.mod                      # Go module dependencies
-├── go.sum                      # Go module checksums
-├── README.md                   # This file
-├── copycat-logo.png            # Logo image
-└── repos/                      # Temporary directory for cloned repos (auto-cleaned)
-```
 
 ## Troubleshooting
 
