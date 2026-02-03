@@ -24,6 +24,7 @@ type GitHubConfig struct {
 type Config struct {
 	GitHub        GitHubConfig `yaml:"github"`
 	AIToolsConfig `yaml:",inline"`
+	Projects      []Project `yaml:"projects,omitempty"`
 }
 
 type AITool struct {
@@ -94,4 +95,32 @@ func (c *AIToolsConfig) ToolByName(name string) (*AITool, bool) {
 	}
 
 	return nil, false
+}
+
+// Save writes the configuration to a file with readable formatting.
+func (c *Config) Save(filename string) error {
+	// Marshal each section separately to add spacing between them
+	githubData, err := yaml.Marshal(map[string]GitHubConfig{"github": c.GitHub})
+	if err != nil {
+		return fmt.Errorf("failed to encode github config: %w", err)
+	}
+
+	toolsData, err := yaml.Marshal(map[string][]AITool{"tools": c.Tools})
+	if err != nil {
+		return fmt.Errorf("failed to encode tools config: %w", err)
+	}
+
+	projectsData, err := yaml.Marshal(map[string][]Project{"projects": c.Projects})
+	if err != nil {
+		return fmt.Errorf("failed to encode projects config: %w", err)
+	}
+
+	// Combine with blank lines between sections
+	data := string(githubData) + "\n" + string(toolsData) + "\n" + string(projectsData)
+
+	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+		return fmt.Errorf("failed to write config to %s: %w", filename, err)
+	}
+
+	return nil
 }

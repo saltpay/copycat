@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"copycat/internal/ai"
-	"copycat/internal/cache"
+	"copycat/internal/cmd"
 	"copycat/internal/config"
 	"copycat/internal/filesystem"
 	"copycat/internal/git"
@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	reposDir         = "repos"
-	projectCacheFile = ".projects.yaml"
+	reposDir = "repos"
 )
 
 // SafeLogger provides thread-safe logging for parallel operations
@@ -52,6 +51,12 @@ func (sl *SafeLogger) LogError(format string, args ...interface{}) {
 
 var safeLogger = &SafeLogger{}
 
+// appConfig holds the loaded configuration (used for saving after sync).
+var appConfig *config.Config
+
+// configPath holds the resolved path to the config file.
+var configPath string
+
 // ProcessJob represents a single project processing job
 type ProcessJob struct {
 	Project         config.Project
@@ -72,6 +77,27 @@ type ProcessResult struct {
 }
 
 func main() {
+	// Handle subcommands before flag parsing
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "edit":
+			if err := cmd.RunEdit(); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "migrate":
+			if err := cmd.RunMigrate(); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "reset":
+			if err := cmd.RunReset(); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+	}
+
 	// Parse command-line flags
 	parallelism := flag.Int("parallel", 3, "number of repositories to process in parallel (default: 3)")
 	flag.Parse()
@@ -86,20 +112,38 @@ func main() {
 
 	filesystem.DeleteWorkspace()
 
+	// Get XDG config path
+	var err error
+	configPath, err = config.ConfigPath()
+	if err != nil {
+		log.Fatal("Failed to get config path:", err)
+	}
+
 	// Load combined configuration
-	appConfig, err := config.Load("config.yaml")
+	appConfig, err = config.Load(configPath)
 	if err != nil {
-		log.Fatal("Failed to load configuration:", err)
+		if errors.Is(err, os.ErrNotExist) {
+			// First run - set up config interactively
+			appConfig, err = handleFirstRun(configPath)
+			if err != nil {
+				log.Fatal(err)
+			}
+		} else {
+			log.Fatal("Failed to load configuration:", err)
+		}
 	}
 
-	projects, fromCache, err := loadProjectList(appConfig.GitHub)
-	if err != nil {
-		log.Fatal("Failed to load project list:", err)
-	}
-
-	if fromCache {
-		fmt.Printf("\n✓ Loaded %d projects from cache (%s)\n", len(projects), projectCacheFile)
-		fmt.Println("Press 'r' in the selector to refresh from GitHub.")
+	// Load projects from config, or fetch if empty
+	projects := appConfig.Projects
+	if len(projects) == 0 {
+		fmt.Println("No projects in config. Fetching from GitHub...")
+		projects, err = fetchAndSyncProjects(appConfig.GitHub)
+		if err != nil {
+			log.Fatal("Failed to fetch projects:", err)
+		}
+	} else {
+		fmt.Printf("\n✓ Loaded %d projects from config (%s)\n", len(projects), configPath)
+		fmt.Println("Press 'r' in the selector to sync from GitHub.")
 	}
 
 	// Warn about projects without slack rooms configured
@@ -117,10 +161,10 @@ func main() {
 		}
 
 		if refreshRequested {
-			fmt.Println("\nRefreshing project list from GitHub...")
-			refreshedProjects, refreshErr := fetchAndCacheProjectList(appConfig.GitHub)
+			fmt.Println("\nSyncing project list from GitHub...")
+			refreshedProjects, refreshErr := fetchAndSyncProjects(appConfig.GitHub)
 			if refreshErr != nil {
-				log.Printf("Failed to refresh project list: %v", refreshErr)
+				log.Printf("Failed to sync project list: %v", refreshErr)
 				continue
 			}
 			projects = refreshedProjects
@@ -154,7 +198,7 @@ func main() {
 
 	switch {
 	case strings.HasPrefix(action, "Create GitHub Issues"):
-		git.CreateGitHubIssues(selectedProjects)
+		git.CreateGitHubIssues(appConfig.GitHub, selectedProjects)
 	case strings.HasPrefix(action, "Perform Changes Locally"):
 		// Interactive AI tool selection (only needed for local changes)
 		selectedTool, err := input.SelectAITool(&appConfig.AIToolsConfig)
@@ -201,64 +245,133 @@ func warnProjectsWithoutSlackRoom(projects []config.Project) {
 		}
 	}
 	if len(missing) > 0 {
-		fmt.Printf("\n⚠️  Warning: %d project(s) have no slack_room configured in %s:\n", len(missing), projectCacheFile)
+		fmt.Printf("\n⚠️  Warning: %d project(s) have no slack_room configured:\n", len(missing))
 		for _, repo := range missing {
 			fmt.Printf("   - %s\n", repo)
 		}
+		fmt.Printf("Run 'copycat edit' to add slack_room values.\n\n")
+	}
+}
+
+func handleFirstRun(configPath string) (*config.Config, error) {
+	fmt.Println("Welcome to Copycat!")
+	fmt.Printf("Configuration now follows XDG structure: %s\n", configPath)
+	fmt.Println()
+
+	// Check for old local config files (only if XDG config doesn't exist)
+	oldConfigExists := fileExists("config.yaml")
+	oldProjectsExists := fileExists(".projects.yaml")
+
+	if (oldConfigExists || oldProjectsExists) && !fileExists(configPath) {
+		fmt.Println("Found existing local config files:")
+		if oldConfigExists {
+			fmt.Println("  - config.yaml")
+		}
+		if oldProjectsExists {
+			fmt.Println("  - .projects.yaml")
+		}
 		fmt.Println()
-	}
-}
 
-func loadProjectList(githubCfg config.GitHubConfig) ([]config.Project, bool, error) {
-	projects, err := cache.LoadProjects(projectCacheFile)
-	if err == nil {
-		return projects, true, nil
+		choice, err := input.SelectOption("How would you like to proceed?", []string{
+			"Migrate existing config",
+			"Start fresh",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("setup cancelled")
+		}
+
+		if choice == "Migrate existing config" {
+			if err := cmd.RunMigrate(); err != nil {
+				return nil, err
+			}
+			return config.Load(configPath)
+		}
 	}
 
-	if errors.Is(err, os.ErrNotExist) {
-		fmt.Println("No project cache found. Fetching project list from GitHub...")
-	} else {
-		log.Printf("Failed to load project cache %s: %v. Fetching from GitHub...", projectCacheFile, err)
-	}
+	// Start fresh - prompt for org
+	fmt.Println("Let's set up your configuration.")
+	fmt.Println()
 
-	projects, err = fetchAndCacheProjectList(githubCfg)
+	org, err := input.GetTextInput("GitHub Organization", "e.g., my-org")
 	if err != nil {
-		return nil, false, err
+		return nil, fmt.Errorf("setup cancelled")
 	}
 
-	return projects, false, nil
+	// Ensure config directory exists
+	if err := config.EnsureConfigDir(); err != nil {
+		return nil, fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Create default config
+	cfg := config.DefaultConfig(org)
+	if err := cfg.Save(configPath); err != nil {
+		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Printf("\n✓ Configuration created at: %s\n", configPath)
+	fmt.Println()
+
+	return cfg, nil
 }
 
-func fetchAndCacheProjectList(githubCfg config.GitHubConfig) ([]config.Project, error) {
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func fetchAndSyncProjects(githubCfg config.GitHubConfig) ([]config.Project, error) {
 	if githubCfg.AutoDiscoveryTopic != "" {
 		fmt.Printf("\nFetching repositories from %s with topic '%s'...\n", githubCfg.Organization, githubCfg.AutoDiscoveryTopic)
 	} else {
 		fmt.Printf("\nFetching all repositories from %s...\n", githubCfg.Organization)
 	}
 
-	projects, err := git.FetchRepositories(githubCfg)
+	fetchedProjects, err := git.FetchRepositories(githubCfg)
 	if err != nil {
 		return nil, err
 	}
 
 	if githubCfg.AutoDiscoveryTopic != "" {
-		fmt.Printf("✓ Found %d unarchived repositories with topic '%s'\n", len(projects), githubCfg.AutoDiscoveryTopic)
+		fmt.Printf("✓ Found %d unarchived repositories with topic '%s'\n", len(fetchedProjects), githubCfg.AutoDiscoveryTopic)
 	} else {
-		fmt.Printf("✓ Found %d unarchived repositories\n", len(projects))
+		fmt.Printf("✓ Found %d unarchived repositories\n", len(fetchedProjects))
 	}
 
-	if err := cache.SaveProjects(projectCacheFile, projects); err != nil {
-		log.Printf("Failed to update project cache: %v", err)
-	} else {
-		fmt.Printf("✓ Updated project cache at %s\n", projectCacheFile)
-	}
+	// Merge with existing projects to preserve manual edits (like slack_room)
+	mergedProjects := mergeProjects(appConfig.Projects, fetchedProjects)
 
-	mergedProjects, err := cache.LoadProjects(projectCacheFile)
-	if err != nil {
-		return projects, nil
+	// Update config and save
+	appConfig.Projects = mergedProjects
+	if err := appConfig.Save(configPath); err != nil {
+		log.Printf("Failed to save config: %v", err)
+	} else {
+		fmt.Printf("✓ Updated config at %s\n", configPath)
 	}
 
 	return mergedProjects, nil
+}
+
+// mergeProjects merges fetched projects with existing ones, preserving manual edits.
+func mergeProjects(existing, fetched []config.Project) []config.Project {
+	// Build a map of existing projects by repo name
+	existingMap := make(map[string]config.Project)
+	for _, p := range existing {
+		existingMap[p.Repo] = p
+	}
+
+	// Merge: use fetched data but preserve slack_room from existing
+	merged := make([]config.Project, 0, len(fetched))
+	for _, fp := range fetched {
+		if ep, ok := existingMap[fp.Repo]; ok {
+			// Preserve slack_room if it was set manually
+			if fp.SlackRoom == "" && ep.SlackRoom != "" {
+				fp.SlackRoom = ep.SlackRoom
+			}
+		}
+		merged = append(merged, fp)
+	}
+
+	return merged
 }
 
 // processProject handles the processing of a single project
