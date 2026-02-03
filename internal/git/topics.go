@@ -1,7 +1,7 @@
 package git
 
 import (
-	"copycat/internal/config"
+	"github.com/saltpay/copycat/internal/config"
 	"encoding/json"
 	"errors"
 	"fmt"

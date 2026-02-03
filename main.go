@@ -10,13 +10,13 @@ import (
 	"strings"
 	"sync"
 
-	"copycat/internal/ai"
-	"copycat/internal/cmd"
-	"copycat/internal/config"
-	"copycat/internal/filesystem"
-	"copycat/internal/git"
-	"copycat/internal/input"
-	"copycat/internal/slack"
+	"github.com/saltpay/copycat/internal/ai"
+	"github.com/saltpay/copycat/internal/cmd"
+	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/filesystem"
+	"github.com/saltpay/copycat/internal/git"
+	"github.com/saltpay/copycat/internal/input"
+	"github.com/saltpay/copycat/internal/slack"
 )
 
 const (
@@ -111,6 +111,9 @@ func main() {
 	}
 
 	filesystem.DeleteWorkspace()
+
+	// Display banner
+	printBanner()
 
 	// Get XDG config path
 	var err error
@@ -251,6 +254,15 @@ func warnProjectsWithoutSlackRoom(projects []config.Project) {
 		}
 		fmt.Printf("Run 'copycat edit' to add slack_room values.\n\n")
 	}
+}
+
+func printBanner() {
+	banner := `
+ /\_/\
+( o.o ) COPYCAT
+ > ^ <
+`
+	fmt.Println(banner)
 }
 
 func handleFirstRun(configPath string) (*config.Config, error) {
