@@ -8,7 +8,7 @@ import (
 	"os/exec"
 )
 
-func CreateGitHubIssues(selectedProjects []config.Project) {
+func CreateGitHubIssues(githubCfg config.GitHubConfig, selectedProjects []config.Project) {
 	issueTitle, err := input.GetTextInput("Issue Title", "Enter the title for the GitHub issue")
 	if err != nil {
 		fmt.Println("No title provided. Exiting.")
@@ -26,7 +26,7 @@ func CreateGitHubIssues(selectedProjects []config.Project) {
 
 	for _, project := range selectedProjects {
 		fmt.Printf("\nCreating issue for %s...\n", project.Repo)
-		err := createGitHubIssueWithCLI(project, issueTitle, issueDescription)
+		err := createGitHubIssueWithCLI(githubCfg, project, issueTitle, issueDescription)
 		if err != nil {
 			log.Printf("Failed to create issue for %s: %v", project.Repo, err)
 		} else {
@@ -35,10 +35,10 @@ func CreateGitHubIssues(selectedProjects []config.Project) {
 	}
 }
 
-func createGitHubIssueWithCLI(project config.Project, title string, description string) error {
+func createGitHubIssueWithCLI(githubCfg config.GitHubConfig, project config.Project, title string, description string) error {
 	// Use GitHub CLI to create the issue
 	cmd := exec.Command("gh", "issue", "create",
-		"--repo", fmt.Sprintf("saltpay/%s", project.Repo),
+		"--repo", fmt.Sprintf("%s/%s", githubCfg.Organization, project.Repo),
 		"--title", title,
 		"--body", description,
 		"--assignee", "@copilot")
