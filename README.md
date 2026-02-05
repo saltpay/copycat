@@ -8,11 +8,31 @@ Welcome to Copycat, a way to copy changes from one git repository to another.
 
 Copycat is an automation tool that enables you to apply consistent changes across multiple GitHub repositories using AI coding assistants. It streamlines the process of creating issues or performing code changes at scale with support for multiple AI tools including Claude, Codex, Qwen, and others.
 
+## Installation
+
+### Using Go
+
+```bash
+go install github.com/saltpay/copycat@latest
+```
+
+### From GitHub Releases
+
+Download the latest binary for your platform from the [Releases page](https://github.com/saltpay/copycat/releases).
+
+### Build from Source
+
+```bash
+git clone git@github.com:saltpay/copycat.git
+cd copycat
+go build -o copycat .
+```
+
 ## Requirements
 
 In order to run Copycat, you need to have the following installed:
 
-- **Go** (1.16 or later)
+- **Go** (1.25 or later)
 - **GitHub CLI** (`gh`) - [Installation guide](https://cli.github.com/)
 - **AI Coding Assistant** - At least one of:
   - **Claude CLI** (`claude`) - [Installation guide](https://docs.claude.com/en/docs/claude-code)
@@ -123,16 +143,12 @@ When Copycat lists repositories it uses the configured discovery topic if provid
 ### Quick Start
 
 ```bash
-go run main.go
-
-# Or build and run
-go build -o copycat
-./copycat
+copycat
 
 # On first run, you'll be guided through setup
 # Then use subcommands to manage your config:
-./copycat edit     # Edit configuration
-./copycat reset    # Start fresh
+copycat edit     # Edit configuration
+copycat reset    # Start fresh
 ```
 
 ### Slack Notifications
@@ -296,6 +312,39 @@ Add a CONTRIBUTING.md file with guidelines for: code style (use gofmt), testing 
 **Refactor code:**
 ```
 Rename all instances of the function 'processData' to 'transformData' across the codebase. Ensure all tests are updated accordingly.
+```
+
+## Contributing
+
+### Running Locally
+
+```bash
+go run main.go          # Run the interactive TUI
+go run main.go edit     # Open config in $EDITOR
+go run main.go reset    # Delete configuration and start fresh
+```
+
+### Commit Messages
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) and [Semantic Versioning](https://semver.org/). Releases are automatically created when commits are merged to `main`.
+
+**Release-triggering prefixes:**
+
+| Prefix | Version Bump |
+|--------|--------------|
+| `feat:` | Minor (0.X.0) |
+| `fix:` | Patch (0.0.X) |
+
+**Breaking changes:** Add `!` after the prefix (e.g., `feat!:`, `fix!:`) or include `BREAKING CHANGE:` in the commit body to trigger a major version bump (X.0.0).
+
+**Non-release prefixes:** `docs:`, `chore:`, `refactor:`, `test:`, `ci:` — these follow conventional commits style but won't trigger a release.
+
+**Examples:**
+```bash
+git commit -m "feat: add support for GitLab repositories"
+git commit -m "fix: handle empty repository list gracefully"
+git commit -m "docs: update configuration examples"
+git commit -m "feat!: change config file format"
 ```
 
 ## Security Notes

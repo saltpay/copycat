@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"copycat/internal/config"
+	"github.com/saltpay/copycat/internal/config"
 )
 
 // RunEdit opens the configuration file in the user's editor.
