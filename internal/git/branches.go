@@ -1,8 +1,8 @@
 package git
 
 import (
-	"copycat/internal/config"
-	"copycat/internal/util"
+	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/util"
 	"fmt"
 	"log"
 	"os/exec"

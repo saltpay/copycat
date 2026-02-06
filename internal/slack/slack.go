@@ -2,8 +2,8 @@ package slack
 
 import (
 	"bytes"
-	"copycat/internal/config"
-	"copycat/internal/input"
+	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/input"
 	"encoding/json"
 	"fmt"
 	"net/http"

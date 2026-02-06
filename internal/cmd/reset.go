@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"copycat/internal/config"
-	"copycat/internal/input"
+	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/input"
 )
 
 // RunReset deletes the configuration file.

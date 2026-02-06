@@ -1,7 +1,7 @@
 package input
 
 import (
-	"copycat/internal/config"
+	"github.com/saltpay/copycat/internal/config"
 	"fmt"
 	"log"
 	"os"
