@@ -57,6 +57,9 @@ var appConfig *config.Config
 // configPath holds the resolved path to the config file.
 var configPath string
 
+// projectsPath holds the resolved path to the projects file.
+var projectsPath string
+
 // ProcessJob represents a single project processing job
 type ProcessJob struct {
 	Project         config.Project
@@ -81,7 +84,10 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "edit":
-			if err := cmd.RunEdit(); err != nil {
+			if len(os.Args) < 3 {
+				log.Fatal("Usage: copycat edit <config|projects>")
+			}
+			if err := cmd.RunEdit(os.Args[2]); err != nil {
 				log.Fatal(err)
 			}
 			return
@@ -115,14 +121,18 @@ func main() {
 	// Display banner
 	printBanner()
 
-	// Get XDG config path
+	// Get XDG config and projects paths
 	var err error
 	configPath, err = config.ConfigPath()
 	if err != nil {
 		log.Fatal("Failed to get config path:", err)
 	}
+	projectsPath, err = config.ProjectsPath()
+	if err != nil {
+		log.Fatal("Failed to get projects path:", err)
+	}
 
-	// Load combined configuration
+	// Load configuration
 	appConfig, err = config.Load(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -136,16 +146,16 @@ func main() {
 		}
 	}
 
-	// Load projects from config, or fetch if empty
-	projects := appConfig.Projects
-	if len(projects) == 0 {
-		fmt.Println("No projects in config. Fetching from GitHub...")
+	// Load projects from separate file, or fetch if empty/missing
+	projects, projectsErr := config.LoadProjects(projectsPath)
+	if projectsErr != nil || len(projects) == 0 {
+		fmt.Println("No projects found. Fetching from GitHub...")
 		projects, err = fetchAndSyncProjects(appConfig.GitHub)
 		if err != nil {
 			log.Fatal("Failed to fetch projects:", err)
 		}
 	} else {
-		fmt.Printf("\n✓ Loaded %d projects from config (%s)\n", len(projects), configPath)
+		fmt.Printf("\n✓ Loaded %d projects from %s\n", len(projects), projectsPath)
 		fmt.Println("Press 'r' in the selector to sync from GitHub.")
 	}
 
@@ -252,7 +262,7 @@ func warnProjectsWithoutSlackRoom(projects []config.Project) {
 		for _, repo := range missing {
 			fmt.Printf("   - %s\n", repo)
 		}
-		fmt.Printf("Run 'copycat edit' to add slack_room values.\n\n")
+		fmt.Printf("Run 'copycat edit projects' to add slack_room values.\n\n")
 	}
 }
 
@@ -349,15 +359,17 @@ func fetchAndSyncProjects(githubCfg config.GitHubConfig) ([]config.Project, erro
 		fmt.Printf("✓ Found %d unarchived repositories\n", len(fetchedProjects))
 	}
 
-	// Merge with existing projects to preserve manual edits (like slack_room)
-	mergedProjects := mergeProjects(appConfig.Projects, fetchedProjects)
+	// Load existing projects to preserve manual edits (like slack_room)
+	existingProjects, _ := config.LoadProjects(projectsPath)
 
-	// Update config and save
-	appConfig.Projects = mergedProjects
-	if err := appConfig.Save(configPath); err != nil {
-		log.Printf("Failed to save config: %v", err)
+	// Merge with existing projects
+	mergedProjects := mergeProjects(existingProjects, fetchedProjects)
+
+	// Save projects to separate file
+	if err := config.SaveProjects(projectsPath, mergedProjects); err != nil {
+		log.Printf("Failed to save projects: %v", err)
 	} else {
-		fmt.Printf("✓ Updated config at %s\n", configPath)
+		fmt.Printf("✓ Updated projects at %s\n", projectsPath)
 	}
 
 	return mergedProjects, nil

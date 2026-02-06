@@ -8,19 +8,33 @@ import (
 	"github.com/saltpay/copycat/internal/input"
 )
 
-// RunReset deletes the configuration file.
+// RunReset deletes the configuration and projects files.
 func RunReset() error {
 	configPath, err := config.ConfigPath()
 	if err != nil {
 		return fmt.Errorf("failed to get config path: %w", err)
 	}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	projectsPath, err := config.ProjectsPath()
+	if err != nil {
+		return fmt.Errorf("failed to get projects path: %w", err)
+	}
+
+	configExists := fileExists(configPath)
+	projectsExists := fileExists(projectsPath)
+
+	if !configExists && !projectsExists {
 		fmt.Println("No configuration to reset.")
 		return nil
 	}
 
-	fmt.Printf("This will delete: %s\n", configPath)
+	fmt.Println("This will delete:")
+	if configExists {
+		fmt.Printf("  - %s\n", configPath)
+	}
+	if projectsExists {
+		fmt.Printf("  - %s\n", projectsPath)
+	}
 
 	confirm, err := input.SelectOption("Are you sure?", []string{
 		"No, cancel",
@@ -31,8 +45,15 @@ func RunReset() error {
 		return nil
 	}
 
-	if err := os.Remove(configPath); err != nil {
-		return fmt.Errorf("failed to delete config: %w", err)
+	if configExists {
+		if err := os.Remove(configPath); err != nil {
+			return fmt.Errorf("failed to delete config: %w", err)
+		}
+	}
+	if projectsExists {
+		if err := os.Remove(projectsPath); err != nil {
+			return fmt.Errorf("failed to delete projects: %w", err)
+		}
 	}
 
 	fmt.Println("✓ Configuration deleted.")

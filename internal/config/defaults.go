@@ -36,8 +36,6 @@ tools:
       - --approval-mode
       - auto_edit
     summary_args: []
-
-projects: []
 `
 
 // DefaultConfigContent returns the default config content with the given org.
@@ -80,6 +78,5 @@ func DefaultConfig(org string) *Config {
 				},
 			},
 		},
-		Projects: []Project{},
 	}
 }

@@ -57,11 +57,13 @@ claude auth login
 
 Copycat stores its configuration in a platform-specific location:
 
-| Platform | Config Path |
-|----------|-------------|
-| Linux | `~/.config/copycat/config.yaml` |
-| macOS | `~/Library/Application Support/copycat/config.yaml` |
-| Windows | `%AppData%/copycat/config.yaml` |
+| Platform   | Config Path                                         | Projects Path                                         |
+|------------|-----------------------------------------------------|-------------------------------------------------------|
+| Linux      | `~/.config/copycat/config.yaml`                     | `~/.config/copycat/projects.yaml`                     |
+| macOS      | `~/Library/Application Support/copycat/config.yaml` | `~/Library/Application Support/copycat/projects.yaml` |
+| Windows    | `%AppData%/copycat/config.yaml`                     | `%AppData%/copycat/projects.yaml`                     |
+
+Projects are stored in a separate `projects.yaml` file so it can be symlinked independently (e.g., different project lists per team or context).
 
 ### First Run
 
@@ -85,13 +87,16 @@ If no existing local config is found, you'll be prompted for your GitHub organiz
 ### Subcommands
 
 ```bash
-copycat          # Run the interactive TUI
-copycat edit     # Open config in $EDITOR
-copycat migrate  # Migrate from old local config files
-copycat reset    # Delete configuration and start fresh
+copycat                # Run the interactive TUI
+copycat edit config    # Open config.yaml in $EDITOR
+copycat edit projects  # Open projects.yaml in $EDITOR
+copycat migrate        # Migrate from old local config files
+copycat reset          # Delete configuration files and start fresh
 ```
 
 ### Config File Structure
+
+**`config.yaml`** — tool and organization settings:
 
 ```yaml
 github:
@@ -111,7 +116,11 @@ tools:
     command: gemini
     code_args: [--approval-mode, auto_edit]
     summary_args: []
+```
 
+**`projects.yaml`** — repository list (separate file, can be symlinked):
+
+```yaml
 projects:
   - repo: service-a
     slack_room: "#team-a"
@@ -121,6 +130,8 @@ projects:
 
 ### Configuration Fields
 
+**`config.yaml`:**
+
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
 - `tools`: List of AI tools available in the selector
@@ -128,6 +139,9 @@ projects:
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
+
+**`projects.yaml`:**
+
 - `projects`: List of repositories (synced from GitHub or added manually)
   - `repo`: Repository name
   - `slack_room`: Slack channel for notifications (optional)
@@ -143,7 +157,8 @@ copycat
 
 # On first run, you'll be guided through setup
 # Then use subcommands to manage your config:
-copycat edit     # Edit configuration
+copycat edit config    # Edit config.yaml
+copycat edit projects  # Edit projects.yaml
 copycat reset    # Start fresh
 ```
 
@@ -168,7 +183,7 @@ go run main.go
 - If `SLACK_BOT_TOKEN` is not set, Slack notifications are skipped entirely
 - Notifications are grouped by Slack channel (one message per channel)
 - You will be prompted to confirm before sending notifications
-- Configure `slack_room` per project in your config file (use `copycat edit`)
+- Configure `slack_room` per project in `projects.yaml` (use `copycat edit projects`)
 
 ### Workflow Options
 
@@ -312,9 +327,10 @@ Rename all instances of the function 'processData' to 'transformData' across the
 ### Running Locally
 
 ```bash
-go run main.go          # Run the interactive TUI
-go run main.go edit     # Open config in $EDITOR
-go run main.go reset    # Delete configuration and start fresh
+go run main.go                 # Run the interactive TUI
+go run main.go edit config     # Open config.yaml in $EDITOR
+go run main.go edit projects   # Open projects.yaml in $EDITOR
+go run main.go reset           # Delete configuration files and start fresh
 ```
 
 ### Commit Messages
@@ -323,10 +339,10 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) a
 
 **Release-triggering prefixes:**
 
-| Prefix | Version Bump |
-|--------|--------------|
-| `feat:` | Minor (0.X.0) |
-| `fix:` | Patch (0.0.X) |
+| Prefix   | Version Bump  |
+|----------|---------------|
+| `feat:`  | Minor (0.X.0) |
+| `fix:`   | Patch (0.0.X) |
 
 **Breaking changes:** Add `!` after the prefix (e.g., `feat!:`, `fix!:`) or include `BREAKING CHANGE:` in the commit body to trigger a major version bump (X.0.0).
 
@@ -346,4 +362,3 @@ git commit -m "feat!: change config file format"
 - Credentials are managed via GitHub CLI and Claude CLI
 - No credentials are stored by Copycat
 - Repository clones are cleaned up after processing
-

@@ -6,8 +6,9 @@ import (
 )
 
 const (
-	AppName        = "copycat"
-	ConfigFileName = "config.yaml"
+	AppName          = "copycat"
+	ConfigFileName   = "config.yaml"
+	ProjectsFileName = "projects.yaml"
 )
 
 // ConfigDir returns the platform-appropriate config directory for copycat.
@@ -41,6 +42,16 @@ func EnsureConfigDir() error {
 	}
 
 	return os.MkdirAll(dir, 0o755)
+}
+
+// ProjectsPath returns the full path to the projects file.
+func ProjectsPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(dir, ProjectsFileName), nil
 }
 
 // ConfigExists checks if a config file exists at the platform config path.
