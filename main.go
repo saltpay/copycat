@@ -226,6 +226,7 @@ func main() {
 		branchStrategy, err := input.SelectOption("Branch strategy?", []string{
 			"Always create new branches",
 			"Specify branch name (reuse if exists)",
+			"Specify branch name (skip if exists)",
 		})
 		if err != nil {
 			fmt.Println("Branch strategy selection cancelled. Exiting.")
@@ -233,7 +234,7 @@ func main() {
 		}
 
 		var specifiedBranch string
-		if strings.HasPrefix(branchStrategy, "Specify branch name") {
+		if strings.Contains(branchStrategy, "branch name") {
 			specifiedBranch, err = input.GetTextInput("Branch name", "Enter the branch name to use/create across all repos")
 			if err != nil || specifiedBranch == "" {
 				fmt.Println("No branch name provided. Exiting.")
@@ -436,6 +437,11 @@ func processProject(job ProcessJob) ProcessResult {
 	// Select or create branch based on strategy
 	branchName, err := git.SelectOrCreateBranch(targetPath, job.PRTitle, job.BranchStrategy, job.SpecifiedBranch)
 	if err != nil {
+		if errors.Is(err, git.ErrBranchExists) {
+			safeLogger.Printf("%s⏭️  Skipping %s: %v\n", logPrefix, project.Repo, err)
+			cleanup()
+			return ProcessResult{Project: project, Success: false, Error: err}
+		}
 		safeLogger.LogError("%sFailed to select/create branch in %s: %v", logPrefix, project.Repo, err)
 		cleanup()
 		return ProcessResult{Project: project, Success: false, Error: err}
