@@ -7,7 +7,6 @@ import "fmt"
 const ConfigTemplate = `github:
   organization: %s
   auto_discovery_topic: copycat
-  requires_ticket_topic: requires-ticket
 
 tools:
   - name: claude
@@ -37,8 +36,6 @@ tools:
       - --approval-mode
       - auto_edit
     summary_args: []
-
-projects: []
 `
 
 // DefaultConfigContent returns the default config content with the given org.
@@ -50,9 +47,8 @@ func DefaultConfigContent(org string) string {
 func DefaultConfig(org string) *Config {
 	return &Config{
 		GitHub: GitHubConfig{
-			Organization:        org,
-			AutoDiscoveryTopic:  "copycat",
-			RequiresTicketTopic: "requires-ticket",
+			Organization:       org,
+			AutoDiscoveryTopic: "copycat",
 		},
 		AIToolsConfig: AIToolsConfig{
 			Tools: []AITool{
@@ -82,6 +78,5 @@ func DefaultConfig(org string) *Config {
 				},
 			},
 		},
-		Projects: []Project{},
 	}
 }

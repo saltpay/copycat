@@ -1,10 +1,10 @@
 package git
 
 import (
-	"github.com/saltpay/copycat/internal/config"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/saltpay/copycat/internal/config"
 	"os/exec"
 	"sort"
 	"strings"
@@ -125,18 +125,6 @@ func computeTopicChanges(existing []string, project config.Project, githubCfg co
 		systemTopics[discoveryTopic] = struct{}{}
 		if _, hasTopic := existingSet[discoveryTopic]; !hasTopic {
 			addTopics = append(addTopics, discoveryTopic)
-		}
-	}
-
-	requiresTopic := strings.TrimSpace(githubCfg.RequiresTicketTopic)
-	if requiresTopic != "" {
-		systemTopics[requiresTopic] = struct{}{}
-		_, hasTopic := existingSet[requiresTopic]
-		if project.RequiresTicket && !hasTopic {
-			addTopics = append(addTopics, requiresTopic)
-		}
-		if !project.RequiresTicket && hasTopic {
-			removeTopics = append(removeTopics, requiresTopic)
 		}
 	}
 

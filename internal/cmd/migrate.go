@@ -17,10 +17,9 @@ type oldProjectCache struct {
 }
 
 type oldCachedProject struct {
-	Repo           string   `yaml:"repo"`
-	SlackRoom      string   `yaml:"slack_room"`
-	RequiresTicket bool     `yaml:"requires_ticket"`
-	Topics         []string `yaml:"topics,omitempty"`
+	Repo      string   `yaml:"repo"`
+	SlackRoom string   `yaml:"slack_room"`
+	Topics    []string `yaml:"topics,omitempty"`
 }
 
 // RunMigrate migrates from old config structure to new unified config.
@@ -74,33 +73,38 @@ func RunMigrate() error {
 		cfg = config.DefaultConfig(org)
 	}
 
-	// Load old projects
+	// Ensure config directory exists
+	if err := config.EnsureConfigDir(); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Load old projects and save to separate file
 	if oldProjectsExists {
 		fmt.Printf("Found: %s\n", oldProjectsPath)
 		projects, err := loadOldProjects(oldProjectsPath)
 		if err != nil {
 			return fmt.Errorf("failed to load old projects: %w", err)
 		}
-		cfg.Projects = projects
-		fmt.Printf("Loaded %d projects\n", len(projects))
+		projectsPath, err := config.ProjectsPath()
+		if err != nil {
+			return fmt.Errorf("failed to get projects path: %w", err)
+		}
+		if err := config.SaveProjects(projectsPath, projects); err != nil {
+			return fmt.Errorf("failed to save projects: %w", err)
+		}
+		fmt.Printf("Migrated %d projects to %s\n", len(projects), projectsPath)
 	} else {
 		fmt.Println("No old .projects.yaml found, starting with empty projects list")
-		cfg.Projects = []config.Project{}
 	}
 
-	// Ensure config directory exists
-	if err := config.EnsureConfigDir(); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Save new unified config
+	// Save config (without projects)
 	if err := cfg.Save(xdgPath); err != nil {
 		return fmt.Errorf("failed to save new config: %w", err)
 	}
 
-	fmt.Printf("\n✓ Created unified config at: %s\n", xdgPath)
+	fmt.Printf("\n✓ Created config at: %s\n", xdgPath)
 	fmt.Println("\nMigration complete!")
-	fmt.Println("Run 'copycat edit' to review your configuration.")
+	fmt.Println("Run 'copycat edit config' to review your configuration.")
 	if oldConfigExists || oldProjectsExists {
 		fmt.Println("\nYou can now manually delete the old files if desired:")
 		if oldConfigExists {
@@ -138,10 +142,9 @@ func loadOldProjects(filename string) ([]config.Project, error) {
 		}
 
 		projects[i] = config.Project{
-			Repo:           p.Repo,
-			SlackRoom:      slackRoom,
-			RequiresTicket: p.RequiresTicket,
-			Topics:         p.Topics,
+			Repo:      p.Repo,
+			SlackRoom: slackRoom,
+			Topics:    p.Topics,
 		}
 	}
 

@@ -9,22 +9,19 @@ import (
 )
 
 type Project struct {
-	Repo           string   `yaml:"repo"`
-	SlackRoom      string   `yaml:"slack_room"`
-	RequiresTicket bool     `yaml:"requires_ticket"`
-	Topics         []string `yaml:"topics,omitempty"`
+	Repo      string   `yaml:"repo"`
+	SlackRoom string   `yaml:"slack_room"`
+	Topics    []string `yaml:"topics,omitempty"`
 }
 
 type GitHubConfig struct {
-	Organization        string `yaml:"organization"`
-	AutoDiscoveryTopic  string `yaml:"auto_discovery_topic"`
-	RequiresTicketTopic string `yaml:"requires_ticket_topic"`
+	Organization       string `yaml:"organization"`
+	AutoDiscoveryTopic string `yaml:"auto_discovery_topic"`
 }
 
 type Config struct {
 	GitHub        GitHubConfig `yaml:"github"`
 	AIToolsConfig `yaml:",inline"`
-	Projects      []Project `yaml:"projects,omitempty"`
 }
 
 type AITool struct {
@@ -110,16 +107,42 @@ func (c *Config) Save(filename string) error {
 		return fmt.Errorf("failed to encode tools config: %w", err)
 	}
 
-	projectsData, err := yaml.Marshal(map[string][]Project{"projects": c.Projects})
-	if err != nil {
-		return fmt.Errorf("failed to encode projects config: %w", err)
-	}
-
 	// Combine with blank lines between sections
-	data := string(githubData) + "\n" + string(toolsData) + "\n" + string(projectsData)
+	data := string(githubData) + "\n" + string(toolsData)
 
 	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
 		return fmt.Errorf("failed to write config to %s: %w", filename, err)
+	}
+
+	return nil
+}
+
+// LoadProjects reads and unmarshals a projects YAML file.
+func LoadProjects(filename string) ([]Project, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	var wrapper struct {
+		Projects []Project `yaml:"projects"`
+	}
+	if err := yaml.Unmarshal(data, &wrapper); err != nil {
+		return nil, fmt.Errorf("failed to parse projects file %s: %w", filename, err)
+	}
+
+	return wrapper.Projects, nil
+}
+
+// SaveProjects marshals and writes projects to a YAML file.
+func SaveProjects(filename string, projects []Project) error {
+	data, err := yaml.Marshal(map[string][]Project{"projects": projects})
+	if err != nil {
+		return fmt.Errorf("failed to encode projects: %w", err)
+	}
+
+	if err := os.WriteFile(filename, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write projects to %s: %w", filename, err)
 	}
 
 	return nil

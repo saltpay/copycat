@@ -57,11 +57,13 @@ claude auth login
 
 Copycat stores its configuration in a platform-specific location:
 
-| Platform | Config Path |
-|----------|-------------|
-| Linux | `~/.config/copycat/config.yaml` |
-| macOS | `~/Library/Application Support/copycat/config.yaml` |
-| Windows | `%AppData%/copycat/config.yaml` |
+| Platform   | Config Path                                         | Projects Path                                         |
+|------------|-----------------------------------------------------|-------------------------------------------------------|
+| Linux      | `~/.config/copycat/config.yaml`                     | `~/.config/copycat/projects.yaml`                     |
+| macOS      | `~/Library/Application Support/copycat/config.yaml` | `~/Library/Application Support/copycat/projects.yaml` |
+| Windows    | `%AppData%/copycat/config.yaml`                     | `%AppData%/copycat/projects.yaml`                     |
+
+Projects are stored in a separate `projects.yaml` file so it can be symlinked independently (e.g., different project lists per team or context).
 
 ### First Run
 
@@ -85,19 +87,21 @@ If no existing local config is found, you'll be prompted for your GitHub organiz
 ### Subcommands
 
 ```bash
-copycat          # Run the interactive TUI
-copycat edit     # Open config in $EDITOR
-copycat migrate  # Migrate from old local config files
-copycat reset    # Delete configuration and start fresh
+copycat                # Run the interactive TUI
+copycat edit config    # Open config.yaml in $EDITOR
+copycat edit projects  # Open projects.yaml in $EDITOR
+copycat migrate        # Migrate from old local config files
+copycat reset          # Delete configuration files and start fresh
 ```
 
 ### Config File Structure
+
+**`config.yaml`** — tool and organization settings:
 
 ```yaml
 github:
   organization: my-org
   auto_discovery_topic: copycat
-  requires_ticket_topic: requires-ticket
 
 tools:
   - name: claude
@@ -112,31 +116,37 @@ tools:
     command: gemini
     code_args: [--approval-mode, auto_edit]
     summary_args: []
+```
 
+**`projects.yaml`** — repository list (separate file, can be symlinked):
+
+```yaml
 projects:
   - repo: service-a
     slack_room: "#team-a"
   - repo: service-b
     slack_room: "#team-b"
-    requires_ticket: true
 ```
 
 ### Configuration Fields
 
+**`config.yaml`:**
+
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
-- `github.requires_ticket_topic` (optional): Topic that marks repositories as requiring a Jira ticket in PR titles
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
+
+**`projects.yaml`:**
+
 - `projects`: List of repositories (synced from GitHub or added manually)
   - `repo`: Repository name
   - `slack_room`: Slack channel for notifications (optional)
-  - `requires_ticket`: Whether PRs require a Jira ticket (auto-detected from topics)
 
-When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub. Any repository with the configured `requires_ticket_topic` is automatically marked as requiring a Jira ticket.
+When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub.
 
 ## Usage
 
@@ -147,7 +157,8 @@ copycat
 
 # On first run, you'll be guided through setup
 # Then use subcommands to manage your config:
-copycat edit     # Edit configuration
+copycat edit config    # Edit config.yaml
+copycat edit projects  # Edit projects.yaml
 copycat reset    # Start fresh
 ```
 
@@ -172,7 +183,7 @@ go run main.go
 - If `SLACK_BOT_TOKEN` is not set, Slack notifications are skipped entirely
 - Notifications are grouped by Slack channel (one message per channel)
 - You will be prompted to confirm before sending notifications
-- Configure `slack_room` per project in your config file (use `copycat edit`)
+- Configure `slack_room` per project in `projects.yaml` (use `copycat edit projects`)
 
 ### Workflow Options
 
@@ -198,8 +209,7 @@ Clones repositories, applies changes using your configured AI coding assistant, 
 **Steps:**
 1. Select repositories from the list (or type "all")
 2. Choose "Perform Changes Locally"
-3. If any selected project includes the configured `requires_ticket_topic`, enter a Jira ticket (e.g., PROJ-123)
-4. Enter PR title
+3. Enter PR title (you'll be reminded to include a ticket reference if needed)
 5. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter
    - **Editor**: Opens your default editor (set via `$EDITOR` env var, defaults to vim)
@@ -228,15 +238,14 @@ Example: `copycat-20231015-150405`
 
 ### Pull Request Titles
 
-- **Regular projects**: Uses the PR title you provide
-- **Projects that require a ticket** (repositories tagged with the configured `requires_ticket_topic`): Automatically prepends Jira ticket: `PROJ-123 - Your PR Title`
+Uses the PR title you provide. You may include a ticket or issue reference directly in the title (e.g., `PROJ-123 - Your PR Title`).
 
 ## How It Works
 
 ### Local Changes Workflow
 
 1. **Input Collection Phase**
-   - Collects all user inputs upfront (Jira ticket, PR title, AI prompt)
+   - Collects all user inputs upfront (PR title, AI prompt)
    - Validates inputs before processing
 
 2. **Repository Processing Phase**
@@ -291,8 +300,7 @@ Example: `copycat-20231015-150405`
 1. **Test with a single repository first** before running on all projects
 2. **Use clear, specific prompts** for your AI tool
 3. **Review changes** before merging PRs
-4. **Keep Jira tickets handy** for projects requiring a ticket
-5. **Use the editor option** for complex multi-line prompts
+4. **Use the editor option** for complex multi-line prompts
 6. **Configure AI tool arguments properly** in `config.yaml` for optimal results
 
 ## Examples
@@ -319,9 +327,10 @@ Rename all instances of the function 'processData' to 'transformData' across the
 ### Running Locally
 
 ```bash
-go run main.go          # Run the interactive TUI
-go run main.go edit     # Open config in $EDITOR
-go run main.go reset    # Delete configuration and start fresh
+go run main.go                 # Run the interactive TUI
+go run main.go edit config     # Open config.yaml in $EDITOR
+go run main.go edit projects   # Open projects.yaml in $EDITOR
+go run main.go reset           # Delete configuration files and start fresh
 ```
 
 ### Commit Messages
@@ -330,10 +339,10 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) a
 
 **Release-triggering prefixes:**
 
-| Prefix | Version Bump |
-|--------|--------------|
-| `feat:` | Minor (0.X.0) |
-| `fix:` | Patch (0.0.X) |
+| Prefix   | Version Bump  |
+|----------|---------------|
+| `feat:`  | Minor (0.X.0) |
+| `fix:`   | Patch (0.0.X) |
 
 **Breaking changes:** Add `!` after the prefix (e.g., `feat!:`, `fix!:`) or include `BREAKING CHANGE:` in the commit body to trigger a major version bump (X.0.0).
 
@@ -353,4 +362,3 @@ git commit -m "feat!: change config file format"
 - Credentials are managed via GitHub CLI and Claude CLI
 - No credentials are stored by Copycat
 - Repository clones are cleaned up after processing
-

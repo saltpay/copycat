@@ -2,10 +2,10 @@ package slack
 
 import (
 	"bytes"
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/input"
 	"encoding/json"
 	"fmt"
+	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/input"
 	"net/http"
 	"os"
 	"strings"
@@ -95,17 +95,18 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 }
 
 func formatMessage(prTitle string, repos []repoWithURL) string {
-	// Format each repo as a link to its PR
-	repoLinks := make([]string, len(repos))
-	for i, r := range repos {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🐱 *%s*\n\n", prTitle))
+	sb.WriteString("Copycat dropped some PRs for you - don't leave them hanging! 👀\n\n")
+	for _, r := range repos {
 		if r.PRURL != "" {
-			repoLinks[i] = fmt.Sprintf("<%s|%s>", r.PRURL, r.Repo)
+			sb.WriteString(fmt.Sprintf("• <%s|%s>\n", r.PRURL, r.Repo))
 		} else {
-			repoLinks[i] = r.Repo
+			sb.WriteString(fmt.Sprintf("• %s\n", r.Repo))
 		}
 	}
-	repoList := strings.Join(repoLinks, ", ")
-	return fmt.Sprintf("🐱 *Copycat* created PRs for: %s\n>%s", repoList, prTitle)
+	sb.WriteString("\nReview, approve, merge - you know the drill 🚀")
+	return sb.String()
 }
 
 func sendMessage(token, channel, text string) error {

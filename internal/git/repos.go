@@ -1,9 +1,9 @@
 package git
 
 import (
-	"github.com/saltpay/copycat/internal/config"
 	"encoding/json"
 	"fmt"
+	"github.com/saltpay/copycat/internal/config"
 	"os/exec"
 )
 
@@ -42,28 +42,16 @@ func FetchRepositories(githubCfg config.GitHubConfig) ([]config.Project, error) 
 		return nil, fmt.Errorf("failed to parse GitHub response: %w", err)
 	}
 
-	// Convert to projects and check for requires-ticket topic
 	var projects []config.Project
 	for _, repo := range repos {
-		requiresTicket := false
-		for _, t := range repo.RepositoryTopics {
-			name := t.Topic
-			if githubCfg.RequiresTicketTopic != "" && name == githubCfg.RequiresTicketTopic {
-				requiresTicket = true
-				break
-			}
-		}
-
-		// Extract topic names from repository topics
 		var topics []string
 		for _, topic := range repo.RepositoryTopics {
 			topics = append(topics, topic.Topic)
 		}
 
 		project := config.Project{
-			Repo:           repo.Name,
-			RequiresTicket: requiresTicket,
-			Topics:         topics,
+			Repo:   repo.Name,
+			Topics: topics,
 		}
 		projects = append(projects, project)
 	}

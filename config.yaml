@@ -2,7 +2,6 @@ github:
   organization: saltpay
   # comment auto_discovery_topic to fetch all repos
   auto_discovery_topic: copycat
-  requires_ticket_topic: requires-ticket
 
 tools:
   - name: claude
