@@ -97,7 +97,6 @@ copycat reset    # Delete configuration and start fresh
 github:
   organization: my-org
   auto_discovery_topic: copycat
-  requires_ticket_topic: requires-ticket
 
 tools:
   - name: claude
@@ -118,14 +117,12 @@ projects:
     slack_room: "#team-a"
   - repo: service-b
     slack_room: "#team-b"
-    requires_ticket: true
 ```
 
 ### Configuration Fields
 
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
-- `github.requires_ticket_topic` (optional): Topic that marks repositories as requiring a Jira ticket in PR titles
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
@@ -134,9 +131,8 @@ projects:
 - `projects`: List of repositories (synced from GitHub or added manually)
   - `repo`: Repository name
   - `slack_room`: Slack channel for notifications (optional)
-  - `requires_ticket`: Whether PRs require a Jira ticket (auto-detected from topics)
 
-When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub. Any repository with the configured `requires_ticket_topic` is automatically marked as requiring a Jira ticket.
+When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub.
 
 ## Usage
 
@@ -198,8 +194,7 @@ Clones repositories, applies changes using your configured AI coding assistant, 
 **Steps:**
 1. Select repositories from the list (or type "all")
 2. Choose "Perform Changes Locally"
-3. If any selected project includes the configured `requires_ticket_topic`, enter a Jira ticket (e.g., PROJ-123)
-4. Enter PR title
+3. Enter PR title (you'll be reminded to include a ticket reference if needed)
 5. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter
    - **Editor**: Opens your default editor (set via `$EDITOR` env var, defaults to vim)
@@ -228,15 +223,14 @@ Example: `copycat-20231015-150405`
 
 ### Pull Request Titles
 
-- **Regular projects**: Uses the PR title you provide
-- **Projects that require a ticket** (repositories tagged with the configured `requires_ticket_topic`): Automatically prepends Jira ticket: `PROJ-123 - Your PR Title`
+Uses the PR title you provide. You may include a ticket or issue reference directly in the title (e.g., `PROJ-123 - Your PR Title`).
 
 ## How It Works
 
 ### Local Changes Workflow
 
 1. **Input Collection Phase**
-   - Collects all user inputs upfront (Jira ticket, PR title, AI prompt)
+   - Collects all user inputs upfront (PR title, AI prompt)
    - Validates inputs before processing
 
 2. **Repository Processing Phase**
@@ -291,8 +285,7 @@ Example: `copycat-20231015-150405`
 1. **Test with a single repository first** before running on all projects
 2. **Use clear, specific prompts** for your AI tool
 3. **Review changes** before merging PRs
-4. **Keep Jira tickets handy** for projects requiring a ticket
-5. **Use the editor option** for complex multi-line prompts
+4. **Use the editor option** for complex multi-line prompts
 6. **Configure AI tool arguments properly** in `config.yaml` for optimal results
 
 ## Examples

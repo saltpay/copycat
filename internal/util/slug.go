@@ -7,7 +7,7 @@ import (
 
 // CreateSlugFromTitle converts a PR title to a git-safe slug
 func CreateSlugFromTitle(title string) string {
-	// Remove Jira ticket prefix if present (e.g., "JIRA-123 - ")
+	// Remove ticket/issue prefix if present (e.g., "PROJ-123 - ")
 	re := regexp.MustCompile(`(?i)^[a-z]+-\d+\s*-\s*`)
 	slug := re.ReplaceAllString(title, "")
 

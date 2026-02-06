@@ -14,7 +14,7 @@ func TestCreateSlugFromTitle(t *testing.T) {
 			expected: "update-dependencies",
 		},
 		{
-			name:     "Title with Jira ticket",
+			name:     "Title with ticket prefix",
 			input:    "PROJ-123 - Fix authentication bug",
 			expected: "fix-authentication-bug",
 		},

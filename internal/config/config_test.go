@@ -12,10 +12,6 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal("organization should be set")
 	}
 
-	if cfg.GitHub.RequiresTicketTopic == "" {
-		t.Fatal("requires ticket topic should be set")
-	}
-
 	if len(cfg.AIToolsConfig.Tools) == 0 {
 		t.Fatal("expected at least one AI tool")
 	}

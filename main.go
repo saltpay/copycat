@@ -62,7 +62,6 @@ type ProcessJob struct {
 	Project         config.Project
 	AITool          *config.AITool
 	AppConfig       config.Config
-	JiraTicket      string
 	PRTitle         string
 	VibeCodePrompt  string
 	BranchStrategy  string
@@ -469,7 +468,7 @@ func processProject(job ProcessJob) ProcessResult {
 		return ProcessResult{Project: project, Success: false, Error: err}
 	}
 
-	output, err = git.CreatePullRequest(project, targetPath, branchName, job.PRTitle, job.JiraTicket, prDescription)
+	output, err = git.CreatePullRequest(project, targetPath, branchName, job.PRTitle, prDescription)
 
 	if err != nil {
 		safeLogger.LogError("%sFailed to create PR for %s: %v\nOutput: %s", logPrefix, project.Repo, err, string(output))
@@ -492,29 +491,7 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 	// STEP 1: Collect all user inputs BEFORE any cloning/changes
 	// ============================================================
 
-	// Check if any selected projects require a ticket
-	hasProjectsRequiringTicket := false
-	for _, project := range selectedProjects {
-		if project.RequiresTicket {
-			hasProjectsRequiringTicket = true
-			break
-		}
-	}
-
-	// Ask for Jira ticket when required
-	var jiraTicket string
-	if hasProjectsRequiringTicket {
-		fmt.Println("\n⚠️  Note: Some selected projects require a Jira ticket in the PR title.")
-
-		var err error
-		jiraTicket, err = input.GetTextInput("Jira Ticket", "e.g., PROJ-123")
-		if err != nil {
-			fmt.Println("No Jira ticket provided. Exiting.")
-			return
-		}
-
-		jiraTicket = strings.ToUpper(jiraTicket)
-	}
+	fmt.Println("\n⚠️  Tip: You may wish to include a ticket or issue reference in the PR title (e.g., PROJ-123 - Description).")
 
 	// Ask for PR title
 	prTitle, err := input.GetTextInput("PR Title", "Enter a descriptive title for the pull request")
@@ -545,7 +522,6 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 			Project:         project,
 			AITool:          aiTool,
 			AppConfig:       appConfig,
-			JiraTicket:      jiraTicket,
 			PRTitle:         prTitle,
 			VibeCodePrompt:  vibeCodePrompt,
 			BranchStrategy:  branchStrategy,

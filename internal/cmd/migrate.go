@@ -17,10 +17,9 @@ type oldProjectCache struct {
 }
 
 type oldCachedProject struct {
-	Repo           string   `yaml:"repo"`
-	SlackRoom      string   `yaml:"slack_room"`
-	RequiresTicket bool     `yaml:"requires_ticket"`
-	Topics         []string `yaml:"topics,omitempty"`
+	Repo      string   `yaml:"repo"`
+	SlackRoom string   `yaml:"slack_room"`
+	Topics    []string `yaml:"topics,omitempty"`
 }
 
 // RunMigrate migrates from old config structure to new unified config.
@@ -138,10 +137,9 @@ func loadOldProjects(filename string) ([]config.Project, error) {
 		}
 
 		projects[i] = config.Project{
-			Repo:           p.Repo,
-			SlackRoom:      slackRoom,
-			RequiresTicket: p.RequiresTicket,
-			Topics:         p.Topics,
+			Repo:      p.Repo,
+			SlackRoom: slackRoom,
+			Topics:    p.Topics,
 		}
 	}
 
