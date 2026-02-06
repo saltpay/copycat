@@ -74,6 +74,7 @@ type ProcessResult struct {
 	Project config.Project
 	Success bool
 	Error   error
+	PRURL   string
 }
 
 func main() {
@@ -476,13 +477,14 @@ func processProject(job ProcessJob) ProcessResult {
 		return ProcessResult{Project: project, Success: false, Error: err}
 	}
 
+	prURL := strings.TrimSpace(string(output))
 	safeLogger.Printf("%s✓ Successfully created PR for %s\n", logPrefix, project.Repo)
-	safeLogger.Printf("%sPR URL: %s", logPrefix, string(output))
+	safeLogger.Printf("%sPR URL: %s\n", logPrefix, prURL)
 
 	// Clean up the cloned repository
 	cleanup()
 
-	return ProcessResult{Project: project, Success: true, Error: nil}
+	return ProcessResult{Project: project, Success: true, Error: nil, PRURL: prURL}
 }
 
 func performChangesLocally(selectedProjects []config.Project, aiTool *config.AITool, appConfig config.Config, parallelism int, branchStrategy string, specifiedBranch string) {
@@ -553,36 +555,39 @@ func performChangesLocally(selectedProjects []config.Project, aiTool *config.AIT
 
 	// Check if we should run sequentially (parallelism = 1)
 	var successfulProjects []config.Project
+	var prURLs map[string]string
 	if parallelism == 1 {
-		successfulProjects = serialProcessing(jobs)
+		successfulProjects, prURLs = serialProcessing(jobs)
 	} else {
-		successfulProjects = parallelProcessing(jobs, parallelism)
+		successfulProjects, prURLs = parallelProcessing(jobs, parallelism)
 	}
 
 	fmt.Println("\nAll repositories have been processed.")
 
 	// Send notifications for successful projects
-	slack.SendNotifications(successfulProjects, prTitle)
+	slack.SendNotifications(successfulProjects, prTitle, prURLs)
 
 	// Final cleanup - remove the repos directory if it's empty
 	filesystem.DeleteEmptyWorkspace()
 }
 
-func serialProcessing(processJobs []ProcessJob) []config.Project {
+func serialProcessing(processJobs []ProcessJob) ([]config.Project, map[string]string) {
 	// Sequential processing (maintain existing behavior)
 	var successfulProjects []config.Project
+	prURLs := make(map[string]string)
 
 	for _, job := range processJobs {
 		result := processProject(job)
 		if result.Success {
 			successfulProjects = append(successfulProjects, result.Project)
+			prURLs[result.Project.Repo] = result.PRURL
 		}
 	}
 
-	return successfulProjects
+	return successfulProjects, prURLs
 }
 
-func parallelProcessing(processJobs []ProcessJob, parallelism int) []config.Project {
+func parallelProcessing(processJobs []ProcessJob, parallelism int) ([]config.Project, map[string]string) {
 	// Parallel processing with worker pool
 	numWorkers := parallelism
 	if numWorkers > len(processJobs) {
@@ -626,15 +631,17 @@ func parallelProcessing(processJobs []ProcessJob, parallelism int) []config.Proj
 
 	// Collect results
 	var successfulProjects []config.Project
+	prURLs := make(map[string]string)
 	var mu sync.Mutex
 
 	for result := range results {
 		mu.Lock()
 		if result.Success {
 			successfulProjects = append(successfulProjects, result.Project)
+			prURLs[result.Project.Repo] = result.PRURL
 		}
 		mu.Unlock()
 	}
 
-	return successfulProjects
+	return successfulProjects, prURLs
 }

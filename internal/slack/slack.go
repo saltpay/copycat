@@ -23,8 +23,14 @@ type slackResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// repoWithURL holds a repository name and its PR URL
+type repoWithURL struct {
+	Repo  string
+	PRURL string
+}
+
 // SendNotifications sends notifications for successful projects, grouped by Slack room
-func SendNotifications(successfulProjects []config.Project, prTitle string) {
+func SendNotifications(successfulProjects []config.Project, prTitle string, prURLs map[string]string) {
 	if len(successfulProjects) == 0 {
 		return
 	}
@@ -35,13 +41,16 @@ func SendNotifications(successfulProjects []config.Project, prTitle string) {
 	}
 
 	// Group projects by Slack room
-	projectsByRoom := make(map[string][]string)
+	projectsByRoom := make(map[string][]repoWithURL)
 	for _, project := range successfulProjects {
 		slackRoom := strings.TrimSpace(project.SlackRoom)
 		if slackRoom == "" {
 			continue // Skip projects without a Slack room
 		}
-		projectsByRoom[slackRoom] = append(projectsByRoom[slackRoom], project.Repo)
+		projectsByRoom[slackRoom] = append(projectsByRoom[slackRoom], repoWithURL{
+			Repo:  project.Repo,
+			PRURL: prURLs[project.Repo],
+		})
 	}
 
 	if len(projectsByRoom) == 0 {
@@ -54,7 +63,11 @@ func SendNotifications(successfulProjects []config.Project, prTitle string) {
 	fmt.Println("Slack Notifications")
 	fmt.Println(strings.Repeat("=", 60))
 	for channel, repos := range projectsByRoom {
-		fmt.Printf("  %s: %s\n", channel, strings.Join(repos, ", "))
+		repoNames := make([]string, len(repos))
+		for i, r := range repos {
+			repoNames[i] = r.Repo
+		}
+		fmt.Printf("  %s: %s\n", channel, strings.Join(repoNames, ", "))
 	}
 
 	// Ask for confirmation
@@ -69,16 +82,29 @@ func SendNotifications(successfulProjects []config.Project, prTitle string) {
 	for channel, repos := range projectsByRoom {
 		message := formatMessage(prTitle, repos)
 		err := sendMessage(token, channel, message)
+		repoNames := make([]string, len(repos))
+		for i, r := range repos {
+			repoNames[i] = r.Repo
+		}
 		if err != nil {
 			fmt.Printf("⚠️  Failed to send notification to %s: %v\n", channel, err)
 		} else {
-			fmt.Printf("✓ Notification sent to %s for: %s\n", channel, strings.Join(repos, ", "))
+			fmt.Printf("✓ Notification sent to %s for: %s\n", channel, strings.Join(repoNames, ", "))
 		}
 	}
 }
 
-func formatMessage(prTitle string, repos []string) string {
-	repoList := strings.Join(repos, ", ")
+func formatMessage(prTitle string, repos []repoWithURL) string {
+	// Format each repo as a link to its PR
+	repoLinks := make([]string, len(repos))
+	for i, r := range repos {
+		if r.PRURL != "" {
+			repoLinks[i] = fmt.Sprintf("<%s|%s>", r.PRURL, r.Repo)
+		} else {
+			repoLinks[i] = r.Repo
+		}
+	}
+	repoList := strings.Join(repoLinks, ", ")
 	return fmt.Sprintf("🐱 *Copycat* created PRs for: %s\n>%s", repoList, prTitle)
 }
 
