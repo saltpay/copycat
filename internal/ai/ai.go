@@ -1,14 +1,18 @@
 package ai
 
 import (
-	"github.com/saltpay/copycat/internal/config"
 	"fmt"
+
+	"github.com/saltpay/copycat/internal/config"
 )
 
-func VibeCode(aiTool *config.AITool, prompt string, targetPath string) (string, error) {
-	// Run the configured AI tool in non-interactive mode to capture output
-	fmt.Printf("Running %s to analyze and apply changes...\n", aiTool.Name)
-	cmd := aiTool.BuildCommand(prompt, aiTool.CodeArgs)
+func VibeCode(aiTool *config.AITool, prompt string, targetPath string, mcpConfigPath string) (string, error) {
+	var opts []config.CommandOptions
+	if mcpConfigPath != "" {
+		opts = append(opts, config.CommandOptions{MCPConfigPath: mcpConfigPath})
+	}
+
+	cmd := aiTool.BuildCommand(prompt, aiTool.CodeArgs, opts...)
 	cmd.Dir = targetPath
 
 	output, err := cmd.CombinedOutput()
@@ -19,8 +23,6 @@ func VibeCode(aiTool *config.AITool, prompt string, targetPath string) (string, 
 func GeneratePRDescription(aiTool *config.AITool, project config.Project, aiOutput string, targetPath string) (string, error) {
 	summaryPrompt := fmt.Sprintf("Write a concise PR description (2-3 sentences) for the following changes. Output ONLY the description text, no preamble:\n\n%s", aiOutput)
 
-	// Run the configured AI tool in non-interactive mode to capture output
-	fmt.Printf("Generating PR description...\n")
 	cmd := aiTool.BuildCommand(summaryPrompt, aiTool.SummaryArgs)
 	cmd.Dir = targetPath
 

@@ -28,10 +28,5 @@ func CreateWorkspace() {
 }
 
 func DeleteDirectory(targetPath string) {
-	fmt.Printf("Cleaning up %s...\n", targetPath)
-	if err := os.RemoveAll(targetPath); err != nil {
-		log.Printf("Warning: Failed to remove %s: %v", targetPath, err)
-	} else {
-		fmt.Printf("✓ Cleaned up %s\n", targetPath)
-	}
+	os.RemoveAll(targetPath)
 }

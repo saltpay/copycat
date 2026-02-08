@@ -15,8 +15,30 @@ tools:
       - --print
       - --permission-mode
       - acceptEdits
+      - --setting-sources
+      - user
     summary_args:
       - --print
+      - --setting-sources
+      - user
+    allowed_tools:
+      - Edit
+      - "List(*)"
+      - "Read(*)"
+      - "Bash(tree:*)"
+      - "Bash(cat:*)"
+      - "Bash(find:*)"
+      - "Bash(wc:*)"
+      - "Bash(grep:*)"
+      - "Bash(./mvnw test:*)"
+      - "Bash(./mvnw verify:*)"
+      - "Bash(./mvnw compile:*)"
+      - "Bash(./mvnw clean test:*)"
+      - "Bash(./mvnw clean verify:*)"
+    disallowed_tools:
+      - WebFetch
+      - Task
+    supports_permission_prompt: true
   - name: codex
     command: codex
     code_args:
@@ -53,10 +75,25 @@ func DefaultConfig(org string) *Config {
 		AIToolsConfig: AIToolsConfig{
 			Tools: []AITool{
 				{
-					Name:        "claude",
-					Command:     "claude",
-					CodeArgs:    []string{"--print", "--permission-mode", "acceptEdits"},
-					SummaryArgs: []string{"--print"},
+					Name:    "claude",
+					Command: "claude",
+					CodeArgs: []string{
+						"--print", "--permission-mode", "acceptEdits",
+						"--setting-sources", "user",
+					},
+					SummaryArgs: []string{"--print", "--setting-sources", "user"},
+					AllowedTools: []string{
+						"Edit",
+						"List(*)",
+						"Read(*)",
+						"Bash(tree:*)",
+						"Bash(cat:*)",
+						"Bash(find:*)",
+						"Bash(wc:*)",
+						"Bash(grep:*)",
+					},
+					DisallowedTools:          []string{"WebFetch", "Task"},
+					SupportsPermissionPrompt: true,
 				},
 				{
 					Name:        "codex",
