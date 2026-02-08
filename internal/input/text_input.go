@@ -39,7 +39,7 @@ func initialTextInputModelWithLimit(title, placeholder string, charLimit int) te
 }
 
 func (m textInputModel) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(tea.ClearScreen, textinput.Blink)
 }
 
 func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

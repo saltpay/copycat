@@ -1,8 +1,8 @@
 package input
 
 import (
-	"github.com/saltpay/copycat/internal/config"
 	"fmt"
+	"github.com/saltpay/copycat/internal/config"
 	"sort"
 	"strings"
 
@@ -10,15 +10,28 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const (
+	maxVisibleRows = 15
+	maxColumns     = 3
+)
+
+// projectsConfirmedMsg is emitted when the user confirms their project selection.
+type projectsConfirmedMsg struct {
+	Selected []config.Project
+}
+
+// projectsRefreshMsg is emitted when the user requests a project list refresh.
+type projectsRefreshMsg struct{}
+
 type projectSelectorModel struct {
-	projects         []config.Project
-	cursor           int
-	selected         map[int]struct{}
-	confirmed        bool
-	termWidth        int
-	termHeight       int
-	quitted          bool
-	refreshRequested bool
+	projects     []config.Project
+	cursor       int
+	selected     map[int]struct{}
+	scrollOffset int
+	termWidth    int
+	termHeight   int
+	quitted      bool
+	refreshing   bool
 	// Filter fields
 	filterMode       bool
 	filterText       string
@@ -39,7 +52,6 @@ func initialModel(projects []config.Project) projectSelectorModel {
 		projects:         sortedProjects,
 		cursor:           0,
 		selected:         make(map[int]struct{}), // Initially no projects selected
-		confirmed:        false,
 		filterMode:       false,
 		filterText:       "",
 		filteredProjects: sortedProjects, // Initially show all projects
@@ -48,7 +60,7 @@ func initialModel(projects []config.Project) projectSelectorModel {
 }
 
 func (m projectSelectorModel) Init() tea.Cmd {
-	return nil
+	return tea.ClearScreen
 }
 
 func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -270,12 +282,10 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "r":
-				m.refreshRequested = true
-				return m, tea.Quit
+				return m, func() tea.Msg { return projectsRefreshMsg{} }
 
 			case "enter":
-				m.confirmed = true
-				return m, tea.Quit
+				return m, func() tea.Msg { return projectsConfirmedMsg{Selected: m.extractSelected()} }
 			}
 		}
 
@@ -284,6 +294,7 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.termHeight = msg.Height
 	}
 
+	m.ensureCursorVisible()
 	return m, nil
 }
 
@@ -342,9 +353,19 @@ func (m projectSelectorModel) allFilteredProjectsSelected() bool {
 	return true
 }
 
+func (m projectSelectorModel) countMissingSlackRooms() int {
+	count := 0
+	for _, p := range m.projects {
+		if strings.TrimSpace(p.SlackRoom) == "" {
+			count++
+		}
+	}
+	return count
+}
+
 func (m projectSelectorModel) calculateColumns() int {
 	if m.termWidth == 0 {
-		return 3 // Default to 3 columns
+		return maxColumns
 	}
 
 	// Determine which projects to use for column calculation
@@ -371,11 +392,53 @@ func (m projectSelectorModel) calculateColumns() int {
 	if numCols < 1 {
 		numCols = 1
 	}
-	if numCols > 4 {
-		numCols = 4 // Max 4 columns for readability
+	if numCols > maxColumns {
+		numCols = maxColumns
 	}
 
 	return numCols
+}
+
+func (m projectSelectorModel) extractSelected() []config.Project {
+	var selected []config.Project
+	for i, project := range m.projects {
+		if _, ok := m.selected[i]; ok {
+			selected = append(selected, project)
+		}
+	}
+	return selected
+}
+
+// ensureCursorVisible adjusts scrollOffset so the cursor's row is within the visible window.
+func (m *projectSelectorModel) ensureCursorVisible() {
+	numCols := m.calculateColumns()
+	projectsToUse := m.filteredProjects
+	numRows := (len(projectsToUse) + numCols - 1) / numCols
+	if numRows == 0 {
+		m.scrollOffset = 0
+		return
+	}
+
+	cursorRow := m.cursor % numRows
+
+	if cursorRow < m.scrollOffset {
+		m.scrollOffset = cursorRow
+	}
+	if cursorRow >= m.scrollOffset+maxVisibleRows {
+		m.scrollOffset = cursorRow - maxVisibleRows + 1
+	}
+
+	// Clamp
+	maxOffset := numRows - maxVisibleRows
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.scrollOffset > maxOffset {
+		m.scrollOffset = maxOffset
+	}
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
 }
 
 func (m projectSelectorModel) View() string {
@@ -383,13 +446,17 @@ func (m projectSelectorModel) View() string {
 		return ""
 	}
 
+	if m.refreshing {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+		return style.Render("  Refreshing project list...")
+	}
+
 	var b strings.Builder
 
 	// Title
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("206")).
-		Padding(1, 0)
+		Foreground(lipgloss.Color("206"))
 
 	if m.filterMode {
 		b.WriteString(titleStyle.Render("Filter Projects by Topic"))
@@ -426,8 +493,22 @@ func (m projectSelectorModel) View() string {
 	}
 	colWidth := maxLen + 2
 
-	// Render in grid layout (column by column)
-	for row := 0; row < numRows; row++ {
+	// Scrolling viewport: only show maxVisibleRows rows
+	visibleRows := numRows
+	if visibleRows > maxVisibleRows {
+		visibleRows = maxVisibleRows
+	}
+	scrollEnd := m.scrollOffset + visibleRows
+
+	// Scroll-up indicator
+	if m.scrollOffset > 0 {
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more row(s) above", m.scrollOffset)))
+		b.WriteString("\n")
+	}
+
+	// Render visible rows of the grid (column by column layout)
+	for row := m.scrollOffset; row < scrollEnd && row < numRows; row++ {
 		var rowItems []string
 
 		for col := 0; col < numCols; col++ {
@@ -464,6 +545,14 @@ func (m projectSelectorModel) View() string {
 		b.WriteString("\n")
 	}
 
+	// Scroll-down indicator
+	rowsBelow := numRows - scrollEnd
+	if rowsBelow > 0 {
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more row(s) below", rowsBelow)))
+		b.WriteString("\n")
+	}
+
 	// Help text
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
@@ -488,42 +577,19 @@ func (m projectSelectorModel) View() string {
 	b.WriteString(countStyle.Render(countText))
 
 	if m.filterMode {
-		countText := fmt.Sprintf("\nShowing: %d of %d projects", len(m.filteredProjects), len(m.projects))
-		b.WriteString(countStyle.Render(countText))
+		filterCountText := fmt.Sprintf("\nShowing: %d of %d projects", len(m.filteredProjects), len(m.projects))
+		b.WriteString(countStyle.Render(filterCountText))
+	}
+
+	// Warn about projects without slack rooms
+	missingSlack := m.countMissingSlackRooms()
+	if missingSlack > 0 {
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+		b.WriteString("\n")
+		b.WriteString(warnStyle.Render(fmt.Sprintf(
+			"⚠ %d project(s) have no slack_room — run 'copycat edit projects' to configure",
+			missingSlack)))
 	}
 
 	return b.String()
-}
-
-func SelectProjects(projects []config.Project) ([]config.Project, bool, error) {
-	if len(projects) == 0 {
-		return nil, false, nil
-	}
-
-	p := tea.NewProgram(initialModel(projects))
-	finalModel, err := p.Run()
-	if err != nil {
-		return nil, false, err
-	}
-
-	m := finalModel.(projectSelectorModel)
-
-	if m.refreshRequested {
-		return nil, true, nil
-	}
-
-	// User quit without confirming
-	if m.quitted || !m.confirmed {
-		return nil, false, nil
-	}
-
-	// Extract selected projects (maintain original order)
-	var selected []config.Project
-	for i, project := range m.projects {
-		if _, ok := m.selected[i]; ok {
-			selected = append(selected, project)
-		}
-	}
-
-	return selected, false, nil
 }
