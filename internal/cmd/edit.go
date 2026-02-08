@@ -8,21 +8,32 @@ import (
 	"github.com/saltpay/copycat/internal/config"
 )
 
-// RunEdit opens the configuration file in the user's editor.
-func RunEdit() error {
-	filePath, err := config.ConfigPath()
-	if err != nil {
-		return fmt.Errorf("failed to resolve config path: %w", err)
+// RunEdit opens a configuration file in the user's editor.
+func RunEdit(target string) error {
+	var filePath string
+	switch target {
+	case "config":
+		p, err := config.ConfigPath()
+		if err != nil {
+			return fmt.Errorf("failed to resolve config path: %w", err)
+		}
+		filePath = p
+	case "projects":
+		p, err := config.ProjectsPath()
+		if err != nil {
+			return fmt.Errorf("failed to resolve projects path: %w", err)
+		}
+		filePath = p
+	default:
+		return fmt.Errorf("unknown edit target %q\n\nUsage: copycat edit <config|projects>", target)
 	}
 
-	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return fmt.Errorf("config file does not exist at %s\n\nRun 'copycat' to set up your configuration", filePath)
+		return fmt.Errorf("file does not exist at %s\n\nRun 'copycat' to set up your configuration", filePath)
 	}
 
 	editor := getEditor()
-
-	fmt.Printf("Opening %s in %s...\n", filePath, editor)
+	fmt.Printf("Opening %s in %s\n", filePath, editor)
 
 	cmd := exec.Command(editor, filePath)
 	cmd.Stdin = os.Stdin

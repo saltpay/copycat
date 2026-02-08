@@ -1,14 +1,19 @@
 package git
 
 import (
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/util"
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/util"
 )
+
+// ErrBranchExists is returned when a branch already exists and the skip strategy is used.
+var ErrBranchExists = errors.New("branch already exists")
 
 func CheckLocalChanges(targetPath string) ([]byte, error) {
 	cmd := exec.Command("git", "status", "--porcelain")
@@ -67,9 +72,14 @@ func SelectOrCreateBranch(repoPath, prTitle, branchStrategy, specifiedBranch str
 		log.Printf("Warning: Failed to fetch from remote: %v", err)
 	}
 
-	// Handle "Specify branch name" strategy (reuse if exists, create if doesn't)
-	if strings.HasPrefix(branchStrategy, "Specify branch name") {
+	// Handle "Specify branch name (reuse if exists)" strategy
+	if strings.Contains(branchStrategy, "reuse if exists") {
 		return checkoutOrCreateBranch(repoPath, specifiedBranch)
+	}
+
+	// Handle "Specify branch name (skip if exists)" strategy
+	if strings.Contains(branchStrategy, "skip if exists") {
+		return createBranchOrSkip(repoPath, specifiedBranch)
 	}
 
 	// Handle "Always create new" strategy (default)
@@ -107,6 +117,33 @@ func checkoutOrCreateBranch(repoPath, branchName string) (string, error) {
 	}
 
 	return branchName, nil
+}
+
+// createBranchOrSkip creates a new branch, or returns ErrBranchExists if it already exists locally or remotely.
+func createBranchOrSkip(repoPath, branchName string) (string, error) {
+	if branchExistsLocally(repoPath, branchName) || branchExistsRemotely(repoPath, branchName) {
+		return "", fmt.Errorf("%w: %s", ErrBranchExists, branchName)
+	}
+
+	createCmd := exec.Command("git", "checkout", "-b", branchName)
+	createCmd.Dir = repoPath
+	output, err := createCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to create branch: %w\nOutput: %s", err, string(output))
+	}
+	return branchName, nil
+}
+
+func branchExistsLocally(repoPath, branchName string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", branchName)
+	cmd.Dir = repoPath
+	return cmd.Run() == nil
+}
+
+func branchExistsRemotely(repoPath, branchName string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", fmt.Sprintf("origin/%s", branchName))
+	cmd.Dir = repoPath
+	return cmd.Run() == nil
 }
 
 // createNewBranch creates a new branch with timestamp and slug

@@ -28,7 +28,7 @@ The primary goal of Copycat is to:
 ### Core Components
 
 1. **GitHub Repository Topics**
-   - Supports metadata: Slack channels, Jira tickets
+   - Supports metadata: Slack channels
 
 2. **Main Application (`main.go`)**
    - Interactive CLI using `promptui`
@@ -65,9 +65,7 @@ The primary goal of Copycat is to:
 
 1. **Branch Naming**: `copycat-YYYYMMDD-HHMMSS` (timestamp-based)
 2. **Commit Messages**: Use PR title as commit message
-3. **PR Titles**:
-   - Projects requiring a ticket: `JIRA-123 - Description`
-   - Regular projects: `Description`
+3. **PR Titles**: `Description` (users are reminded they may include a ticket reference)
 4. **Repository Cloning**: Always use SSH URLs
 5. **Directory Structure**: Temporary clones in `repos/` subdirectory
 
@@ -106,13 +104,6 @@ Keep dependencies minimal. Prefer standard library when possible.
 
 ## Business Rules
 
-### Projects requiring a ticket
-
-- **Mandatory Jira ticket**: PR title must include Jira reference
-- **Format**: `JIRA-123 - Description`
-- **Detection**: Based on a topic in the repository as per config file.
-- **Validation**: Tool prompts for Jira ticket if projects requiring a ticket are selected
-
 ### Pull Request Creation
 
 - **Auto-generated descriptions**: Claude generates PR body from changes
@@ -134,6 +125,6 @@ When working on this codebase:
 3. **Keep it simple**: Avoid over-engineering for edge cases
 4. **User experience matters**: Clear prompts and progress indicators
 5. **Test thoroughly**: Especially git operations and cleanup
-6. **Document business rules**: Jira tickets, etc.
+6. **Document business rules**: Clearly
 7. **Consider scale**: Changes should work for 1 repo or 100 repos
 8. **Security first**: Never compromise authentication or credentials

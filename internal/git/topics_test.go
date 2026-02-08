@@ -153,7 +153,7 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "add auto-discovery topic when missing",
 			existing: []string{},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false},
+			project:  config.Project{Repo: "service-a"},
 			githubCfg: config.GitHubConfig{
 				AutoDiscoveryTopic: "copycat",
 			},
@@ -164,7 +164,7 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "auto-discovery topic already exists",
 			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false},
+			project:  config.Project{Repo: "service-a"},
 			githubCfg: config.GitHubConfig{
 				AutoDiscoveryTopic: "copycat",
 			},
@@ -173,36 +173,11 @@ func TestComputeTopicChanges(t *testing.T) {
 			description: "Should not add auto-discovery topic if already present",
 		},
 		{
-			name:     "add requires-ticket topic",
-			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: true},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
-			},
-			wantAdd:     []string{"requires-ticket"},
-			wantRemove:  nil,
-			description: "Should add requires-ticket topic when RequiresTicket is true",
-		},
-		{
-			name:     "remove requires-ticket topic",
-			existing: []string{"copycat", "requires-ticket"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false},
-			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
-			},
-			wantAdd:     nil,
-			wantRemove:  []string{"requires-ticket"},
-			description: "Should remove requires-ticket topic when RequiresTicket is false",
-		},
-		{
 			name:     "sync project topics - add project topics",
 			existing: []string{"copycat"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false, Topics: []string{"backend", "golang"}},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend", "golang"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     []string{"backend", "golang"},
 			wantRemove:  nil,
@@ -211,10 +186,9 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "sync project topics - remove non-project topics",
 			existing: []string{"copycat", "backend", "golang", "frontend", "vue"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false, Topics: []string{"backend", "golang"}},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend", "golang"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     nil,
 			wantRemove:  []string{"frontend", "vue"},
@@ -223,10 +197,9 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "sync project topics - add missing project topics, remove extra topics",
 			existing: []string{"copycat", "frontend", "vue", "old-topic"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false, Topics: []string{"backend", "golang"}},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend", "golang"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     []string{"backend", "golang"},
 			wantRemove:  []string{"frontend", "vue", "old-topic"},
@@ -234,11 +207,10 @@ func TestComputeTopicChanges(t *testing.T) {
 		},
 		{
 			name:     "sync project topics - preserve system topics",
-			existing: []string{"copycat", "requires-ticket", "backend", "frontend"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: true, Topics: []string{"backend"}},
+			existing: []string{"copycat", "backend", "frontend"},
+			project:  config.Project{Repo: "service-a", Topics: []string{"backend"}},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
+				AutoDiscoveryTopic: "copycat",
 			},
 			wantAdd:     nil,
 			wantRemove:  []string{"frontend"},
@@ -247,10 +219,9 @@ func TestComputeTopicChanges(t *testing.T) {
 		{
 			name:     "empty config values",
 			existing: []string{"some-topic"},
-			project:  config.Project{Repo: "service-a", RequiresTicket: false},
+			project:  config.Project{Repo: "service-a"},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "",
-				RequiresTicketTopic: "",
+				AutoDiscoveryTopic: "",
 			},
 			wantAdd:     nil,
 			wantRemove:  nil,
@@ -303,8 +274,7 @@ func TestSyncProjectSpecificTopics(t *testing.T) {
 				Topics: []string{"backend", "golang", "microservice"},
 			},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
+				AutoDiscoveryTopic: "copycat",
 			},
 			expectedAdd:    []string{"golang", "microservice"},
 			expectedRemove: []string{"frontend", "old-topic", "javascript"},
@@ -314,13 +284,11 @@ func TestSyncProjectSpecificTopics(t *testing.T) {
 			name:     "project without Topics field (not managed)",
 			existing: []string{"copycat", "frontend", "old-topic", "backend", "javascript"},
 			project: config.Project{
-				Repo:           "test-repo",
-				RequiresTicket: false, // RequiresTicket is false, so won't add requires-ticket
-				Topics:         nil,   // Explicitly nil
+				Repo:   "test-repo",
+				Topics: nil, // Explicitly nil
 			},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
+				AutoDiscoveryTopic: "copycat",
 			},
 			expectedAdd:    nil,
 			expectedRemove: []string{}, // Should not remove non-system topics since Topics is nil
@@ -330,13 +298,11 @@ func TestSyncProjectSpecificTopics(t *testing.T) {
 			name:     "project with empty Topics slice",
 			existing: []string{"copycat", "frontend", "old-topic", "backend", "javascript"},
 			project: config.Project{
-				Repo:           "test-repo",
-				RequiresTicket: false,      // RequiresTicket is false, so won't add requires-ticket
-				Topics:         []string{}, // Empty but not nil
+				Repo:   "test-repo",
+				Topics: []string{}, // Empty but not nil
 			},
 			githubCfg: config.GitHubConfig{
-				AutoDiscoveryTopic:  "copycat",
-				RequiresTicketTopic: "requires-ticket",
+				AutoDiscoveryTopic: "copycat",
 			},
 			expectedAdd:    nil,
 			expectedRemove: []string{"frontend", "old-topic", "backend", "javascript"}, // Remove all non-system topics
