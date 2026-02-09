@@ -9,12 +9,10 @@ import (
 
 // ensureLabelExists creates the 'copycat' label in the repository if it doesn't exist
 func ensureLabelExists(targetPath string) {
-	cmd := exec.Command("gh", "label", "create", "copycat",
+	_, _ = runGh(targetPath, "label", "create", "copycat",
 		"--description", "Created by Copycat",
 		"--color", "6f42c1",
 		"--force")
-	cmd.Dir = targetPath
-	_ = cmd.Run()
 }
 
 func CreatePullRequest(project config.Project, targetPath string, branchName string, prTitle string, prDescription string) ([]byte, error) {
@@ -29,13 +27,10 @@ func CreatePullRequest(project config.Project, targetPath string, branchName str
 	}
 	defaultBranch := strings.TrimPrefix(strings.TrimSpace(string(defaultBranchOutput)), "origin/")
 
-	cmd = exec.Command("gh", "pr", "create",
+	return runGh(targetPath, "pr", "create",
 		"--title", prTitle,
 		"--body", prDescription,
 		"--base", defaultBranch,
 		"--head", branchName,
 		"--label", "copycat")
-	cmd.Dir = targetPath
-
-	return cmd.CombinedOutput()
 }

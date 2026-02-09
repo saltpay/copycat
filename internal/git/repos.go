@@ -3,8 +3,8 @@ package git
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/saltpay/copycat/internal/config"
-	"os/exec"
 )
 
 // GitHubRepo represents the JSON response from gh repo list
@@ -30,9 +30,7 @@ func FetchRepositories(githubCfg config.GitHubConfig) ([]config.Project, error) 
 	}
 	args = append(args, "--no-archived", "--limit", "1000")
 
-	cmd := exec.Command("gh", args...)
-
-	output, err := cmd.CombinedOutput()
+	output, err := runGh("", args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch repositories from GitHub: %w\nOutput: %s", err, string(output))
 	}

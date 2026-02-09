@@ -85,16 +85,8 @@ func main() {
 	}
 
 	// Parse command-line flags
-	parallelism := flag.Int("parallel", 3, "number of repositories to process in parallel (default: 3)")
+	parallelism := flag.Int("parallel", 0, "number of repositories to process in parallel (overrides config.yaml)")
 	flag.Parse()
-
-	// Validate parallelism value
-	if *parallelism < 1 {
-		log.Fatal("Parallelism must be at least 1")
-	}
-	if *parallelism > 10 {
-		*parallelism = 10
-	}
 
 	filesystem.DeleteWorkspace()
 
@@ -133,7 +125,14 @@ func main() {
 		}
 	}
 
-	par := *parallelism
+	// CLI flag overrides config value
+	if *parallelism > 0 {
+		if *parallelism > 10 {
+			*parallelism = 10
+		}
+		appConfig.Parallelism = *parallelism
+	}
+	par := appConfig.Parallelism
 
 	dashCfg := input.DashboardConfig{
 		Projects:      projects,

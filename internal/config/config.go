@@ -21,6 +21,7 @@ type GitHubConfig struct {
 
 type Config struct {
 	GitHub        GitHubConfig `yaml:"github"`
+	Parallelism   int          `yaml:"parallelism,omitempty"`
 	AIToolsConfig `yaml:",inline"`
 }
 
@@ -75,6 +76,13 @@ func Load(filename string) (*Config, error) {
 
 	if cfg.GitHub.Organization == "" {
 		return nil, fmt.Errorf("organization is required in %s", filename)
+	}
+
+	if cfg.Parallelism <= 0 {
+		cfg.Parallelism = 3
+	}
+	if cfg.Parallelism > 10 {
+		cfg.Parallelism = 10
 	}
 
 	if len(cfg.AIToolsConfig.Tools) == 0 {
