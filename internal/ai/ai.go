@@ -2,11 +2,12 @@ package ai
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/saltpay/copycat/internal/config"
 )
 
-func VibeCode(aiTool *config.AITool, prompt string, targetPath string, mcpConfigPath string) (string, error) {
+func VibeCode(aiTool *config.AITool, prompt string, targetPath string, mcpConfigPath string, repoName string) (string, error) {
 	var opts []config.CommandOptions
 	if mcpConfigPath != "" {
 		opts = append(opts, config.CommandOptions{MCPConfigPath: mcpConfigPath})
@@ -14,6 +15,9 @@ func VibeCode(aiTool *config.AITool, prompt string, targetPath string, mcpConfig
 
 	cmd := aiTool.BuildCommand(prompt, aiTool.CodeArgs, opts...)
 	cmd.Dir = targetPath
+	if repoName != "" {
+		cmd.Env = append(os.Environ(), "COPYCAT_REPO_NAME="+repoName)
+	}
 
 	output, err := cmd.CombinedOutput()
 

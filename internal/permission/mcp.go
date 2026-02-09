@@ -144,6 +144,7 @@ func handleToolCall(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 	httpReq := permissionHTTPRequest{
 		ToolName: args.ToolName,
 		Command:  command,
+		Repo:     os.Getenv("COPYCAT_REPO_NAME"),
 	}
 	body, _ := json.Marshal(httpReq)
 

@@ -322,7 +322,7 @@ func processProject(job ProcessJob) ProcessResult {
 
 	// Run AI tool
 	job.UpdateStatus("Running AI agent...")
-	aiOutput, err := ai.VibeCode(job.AITool, job.VibeCodePrompt, targetPath, job.MCPConfigPath)
+	aiOutput, err := ai.VibeCode(job.AITool, job.VibeCodePrompt, targetPath, job.MCPConfigPath, project.Repo)
 	if err != nil {
 		cleanup()
 		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v", err)}
