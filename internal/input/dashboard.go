@@ -57,10 +57,11 @@ type DashboardResult struct {
 }
 
 type dashboardModel struct {
-	phase     dashboardPhase
-	cfg       DashboardConfig
-	statusCh  chan tea.Msg
-	termWidth int
+	phase      dashboardPhase
+	cfg        DashboardConfig
+	statusCh   chan tea.Msg
+	termWidth  int
+	termHeight int
 
 	// Sub-models
 	projects projectSelectorModel
@@ -79,6 +80,9 @@ type dashboardModel struct {
 	wizardResult     *WizardResult
 	processResults   map[string]ProjectDoneMsg
 	interrupted      bool
+
+	// Done screen scrolling
+	doneScrollOffset int
 }
 
 func newDashboardModel(cfg DashboardConfig) dashboardModel {
@@ -105,6 +109,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
+		m.termHeight = msg.Height
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			if m.phase == phaseProcessing {
@@ -354,10 +359,41 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.selectedProjects = failedProjects
+			m.doneScrollOffset = 0
 			return m.startProcessing()
+		case "up", "k":
+			if m.doneScrollOffset > 0 {
+				m.doneScrollOffset--
+			}
+		case "down", "j":
+			maxScroll := m.doneMaxScroll()
+			if m.doneScrollOffset < maxScroll {
+				m.doneScrollOffset++
+			}
 		}
 	}
 	return m, nil
+}
+
+// doneMaxScroll returns the maximum scroll offset for the done screen.
+func (m dashboardModel) doneMaxScroll() int {
+	total := len(m.progress.repos)
+	maxVisible := m.doneMaxVisible()
+	if total <= maxVisible {
+		return 0
+	}
+	return total - maxVisible
+}
+
+// doneMaxVisible returns how many result rows fit on screen.
+// Reserves space for: banner(3) + border(2) + header(3) + summary(2) + postLines + help(2) + padding(2).
+func (m dashboardModel) doneMaxVisible() int {
+	overhead := 14 + len(m.progress.postLines)
+	available := m.termHeight - overhead
+	if available < 5 {
+		available = 5
+	}
+	return available
 }
 
 func (m dashboardModel) View() string {
@@ -399,6 +435,8 @@ func (m dashboardModel) renderDoneSummary() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
 	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 
 	if m.interrupted {
 		b.WriteString(titleStyle.Render("Processing interrupted"))
@@ -430,19 +468,41 @@ func (m dashboardModel) renderDoneSummary() string {
 	}
 	b.WriteString("\n\n")
 
+	// Build the list of repos that have results
+	var visibleRepos []string
 	for _, repo := range m.progress.repos {
-		result, ok := results[repo]
-		if !ok {
-			continue
+		if _, ok := results[repo]; ok {
+			visibleRepos = append(visibleRepos, repo)
 		}
-		repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	}
+
+	// Scrolling
+	maxVisible := m.doneMaxVisible()
+	start := m.doneScrollOffset
+	end := start + maxVisible
+	if end > len(visibleRepos) {
+		end = len(visibleRepos)
+	}
+
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
+		b.WriteString("\n")
+	}
+
+	for _, repo := range visibleRepos[start:end] {
+		result := results[repo]
 		b.WriteString(fmt.Sprintf("  %s %s\n", repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
+	}
+
+	remaining := len(visibleRepos) - end
+	if remaining > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
+		b.WriteString("\n")
 	}
 
 	// Post-processing status lines
 	if len(m.progress.postLines) > 0 {
 		b.WriteString("\n")
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 		for _, line := range m.progress.postLines {
 			b.WriteString("  ")
 			b.WriteString(dimStyle.Render(line))
@@ -453,9 +513,14 @@ func (m dashboardModel) renderDoneSummary() string {
 	b.WriteString("\n")
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	if failed > 0 {
-		b.WriteString(helpStyle.Render("  Press r to retry failed, q or enter to exit"))
+		retryStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		b.WriteString(retryStyle.Render(fmt.Sprintf("  Press r to retry %d failed", failed)))
+		b.WriteString(helpStyle.Render("  •  q/enter to exit"))
 	} else {
 		b.WriteString(helpStyle.Render("  Press q or enter to exit"))
+	}
+	if len(visibleRepos) > maxVisible {
+		b.WriteString(helpStyle.Render("  •  ↑↓/jk to scroll"))
 	}
 	b.WriteString("\n")
 
