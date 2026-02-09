@@ -50,6 +50,7 @@ type ProcessJob struct {
 type ProcessResult struct {
 	Project config.Project
 	Success bool
+	Skipped bool
 	Error   error
 	PRURL   string
 }
@@ -344,7 +345,7 @@ func processProject(job ProcessJob) ProcessResult {
 	}
 	if len(output) == 0 {
 		cleanup()
-		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("no changes detected")}
+		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected")}
 	}
 
 	// Push changes
@@ -434,12 +435,15 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 					mu.Unlock()
 
 					var status string
-					if result.Success {
+					switch {
+					case result.Success:
 						status = fmt.Sprintf("Completed ✅ PR: %s", result.PRURL)
-					} else {
+					case result.Skipped:
+						status = fmt.Sprintf("Skipped ⊘ %v", result.Error)
+					default:
 						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
 					}
-					sender.Done(repo, status, result.Success, result.PRURL, result.Error)
+					sender.Done(repo, status, result.Success, result.Skipped, result.PRURL, result.Error)
 				}
 			}()
 		}

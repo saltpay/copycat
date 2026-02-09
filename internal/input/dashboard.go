@@ -349,16 +349,31 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "enter":
 			return m, tea.Quit
 		case "r":
-			var failedProjects []config.Project
+			// Retry only actual failures (not skipped)
+			var retryProjects []config.Project
 			for _, p := range m.selectedProjects {
-				if result, ok := m.processResults[p.Repo]; ok && !result.Success {
-					failedProjects = append(failedProjects, p)
+				if result, ok := m.processResults[p.Repo]; ok && !result.Success && !result.Skipped {
+					retryProjects = append(retryProjects, p)
 				}
 			}
-			if len(failedProjects) == 0 {
+			if len(retryProjects) == 0 {
 				return m, nil
 			}
-			m.selectedProjects = failedProjects
+			m.selectedProjects = retryProjects
+			m.doneScrollOffset = 0
+			return m.startProcessing()
+		case "a":
+			// Retry all non-success (failures + skipped)
+			var retryProjects []config.Project
+			for _, p := range m.selectedProjects {
+				if result, ok := m.processResults[p.Repo]; ok && !result.Success {
+					retryProjects = append(retryProjects, p)
+				}
+			}
+			if len(retryProjects) == 0 {
+				return m, nil
+			}
+			m.selectedProjects = retryProjects
 			m.doneScrollOffset = 0
 			return m.startProcessing()
 		case "up", "k":
@@ -434,6 +449,7 @@ func (m dashboardModel) renderDoneSummary() string {
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
 	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	skipStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
@@ -452,17 +468,24 @@ func (m dashboardModel) renderDoneSummary() string {
 	}
 
 	succeeded := 0
+	skipped := 0
 	failed := 0
 	for _, result := range results {
-		if result.Success {
+		switch {
+		case result.Success:
 			succeeded++
-		} else {
+		case result.Skipped:
+			skipped++
+		default:
 			failed++
 		}
 	}
 
 	b.WriteString(fmt.Sprintf("  Total: %d  ", len(results)))
 	b.WriteString(successStyle.Render(fmt.Sprintf("Succeeded: %d  ", succeeded)))
+	if skipped > 0 {
+		b.WriteString(skipStyle.Render(fmt.Sprintf("Skipped: %d  ", skipped)))
+	}
 	if failed > 0 {
 		b.WriteString(failStyle.Render(fmt.Sprintf("Failed: %d", failed)))
 	}
@@ -512,16 +535,21 @@ func (m dashboardModel) renderDoneSummary() string {
 
 	b.WriteString("\n")
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	retryStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	var hints []string
 	if failed > 0 {
-		retryStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-		b.WriteString(retryStyle.Render(fmt.Sprintf("  Press r to retry %d failed", failed)))
-		b.WriteString(helpStyle.Render("  •  q/enter to exit"))
-	} else {
-		b.WriteString(helpStyle.Render("  Press q or enter to exit"))
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("r: retry %d failed", failed)))
 	}
+	if failed > 0 && skipped > 0 {
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry all %d", failed+skipped)))
+	} else if skipped > 0 {
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry %d skipped", skipped)))
+	}
+	hints = append(hints, helpStyle.Render("q/enter: exit"))
 	if len(visibleRepos) > maxVisible {
-		b.WriteString(helpStyle.Render("  •  ↑↓/jk to scroll"))
+		hints = append(hints, helpStyle.Render("↑↓/jk: scroll"))
 	}
+	b.WriteString("  " + strings.Join(hints, helpStyle.Render("  •  ")))
 	b.WriteString("\n")
 
 	return b.String()

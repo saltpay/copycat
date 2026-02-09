@@ -13,9 +13,9 @@ func CreateGitHubIssuesWithSender(sender *input.StatusSender, githubCfg config.G
 		sender.UpdateStatus(project.Repo, "Creating issue...")
 		err := createGitHubIssueWithCLI(githubCfg, project, issueTitle, issueDescription)
 		if err != nil {
-			sender.Done(project.Repo, fmt.Sprintf("Failed ⚠️ %v", err), false, "", err)
+			sender.Done(project.Repo, fmt.Sprintf("Failed ⚠️ %v", err), false, false, "", err)
 		} else {
-			sender.Done(project.Repo, "Issue created ✅", true, "", nil)
+			sender.Done(project.Repo, "Issue created ✅", true, false, "", nil)
 		}
 	}
 }

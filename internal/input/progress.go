@@ -30,6 +30,7 @@ type ProjectDoneMsg struct {
 	Repo    string
 	Status  string
 	Success bool
+	Skipped bool
 	PRURL   string
 	Error   error
 }
@@ -52,11 +53,12 @@ func (s *StatusSender) UpdateStatus(repo, status string) {
 }
 
 // Done signals that a project has finished processing.
-func (s *StatusSender) Done(repo, status string, success bool, prURL string, err error) {
+func (s *StatusSender) Done(repo, status string, success, skipped bool, prURL string, err error) {
 	s.send(ProjectDoneMsg{
 		Repo:    repo,
 		Status:  status,
 		Success: success,
+		Skipped: skipped,
 		PRURL:   prURL,
 		Error:   err,
 	})
@@ -87,6 +89,10 @@ type progressModel struct {
 	paused             bool
 	checkpointInterval int
 	nextCheckpoint     int
+
+	// Manual scrolling (overrides auto-anchor)
+	manualScroll bool
+	scrollOffset int
 
 	// Permission prompting
 	permissionQueue   []permission.PermissionRequest
@@ -136,6 +142,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statuses[msg.Repo] = msg.Status
 		m.results[msg.Repo] = msg
 		m.completed++
+		m.manualScroll = false
 		if m.checkpointInterval > 0 && m.completed < m.total && m.completed >= m.nextCheckpoint {
 			m.paused = true
 		}
@@ -155,9 +162,25 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nextCheckpoint += m.checkpointInterval
 			return m, func() tea.Msg { return resumeProcessingMsg{} }
 		}
-		if msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "ctrl+c":
 			m.quitted = true
 			return m, tea.Quit
+		case "up", "k":
+			m.manualScroll = true
+			if m.scrollOffset > 0 {
+				m.scrollOffset--
+			}
+		case "down", "j":
+			m.manualScroll = true
+			sorted := m.sortedRepos()
+			maxOffset := len(sorted) - maxVisibleProjects
+			if maxOffset < 0 {
+				maxOffset = 0
+			}
+			if m.scrollOffset < maxOffset {
+				m.scrollOffset++
+			}
 		}
 	}
 	return m, nil
@@ -323,7 +346,7 @@ func (m progressModel) View() string {
 			"⏸  Batch complete — %d of %d repos processed.", m.completed, m.total)))
 		b.WriteString("\n")
 		hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		b.WriteString(hintStyle.Render("  Please verify you have sufficient AI credits before continuing."))
+		b.WriteString(hintStyle.Render("  💰 Please verify you have sufficient AI credits before continuing with the next batch."))
 		b.WriteString("\n")
 		b.WriteString(hintStyle.Render("  Press Enter to continue or Ctrl+C to stop."))
 		b.WriteString("\n\n")
@@ -440,7 +463,19 @@ func (m progressModel) visibleWindow(sorted []string) (int, int) {
 		return 0, len(sorted)
 	}
 
-	// Find the first in-progress item to anchor the view
+	// Use manual scroll offset if the user has scrolled
+	if m.manualScroll {
+		start := m.scrollOffset
+		if start+maxVisibleProjects > len(sorted) {
+			start = len(sorted) - maxVisibleProjects
+		}
+		if start < 0 {
+			start = 0
+		}
+		return start, start + maxVisibleProjects
+	}
+
+	// Auto-anchor: find the first in-progress item
 	firstActive := -1
 	for i, repo := range sorted {
 		if m.statusPriority(repo) == 1 {
