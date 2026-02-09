@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/input"
 	"net/http"
-	"os"
 	"strings"
+
+	"github.com/saltpay/copycat/internal/config"
 )
 
 const slackAPIURL = "https://slack.com/api/chat.postMessage"
@@ -30,14 +29,9 @@ type repoWithURL struct {
 }
 
 // SendNotifications sends notifications for successful projects, grouped by Slack room
-func SendNotifications(successfulProjects []config.Project, prTitle string, prURLs map[string]string) {
+func SendNotifications(successfulProjects []config.Project, prTitle string, prURLs map[string]string, token string) {
 	if len(successfulProjects) == 0 {
 		return
-	}
-
-	token := os.Getenv("SLACK_BOT_TOKEN")
-	if token == "" {
-		return // Silently skip if no token configured
 	}
 
 	// Group projects by Slack room
@@ -55,25 +49,6 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 
 	if len(projectsByRoom) == 0 {
 		fmt.Println("\n⚠️  No Slack rooms configured for successful projects, skipping notifications")
-		return
-	}
-
-	// Show which channels will receive notifications
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("Slack Notifications")
-	fmt.Println(strings.Repeat("=", 60))
-	for channel, repos := range projectsByRoom {
-		repoNames := make([]string, len(repos))
-		for i, r := range repos {
-			repoNames[i] = r.Repo
-		}
-		fmt.Printf("  %s: %s\n", channel, strings.Join(repoNames, ", "))
-	}
-
-	// Ask for confirmation
-	confirm, err := input.SelectOption("Send Slack notifications?", []string{"Yes", "No"})
-	if err != nil || confirm == "No" {
-		fmt.Println("Skipping Slack notifications")
 		return
 	}
 

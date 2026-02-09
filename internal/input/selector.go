@@ -29,7 +29,7 @@ func initialSelectorModel(title string, items []string) selectorModel {
 }
 
 func (m selectorModel) Init() tea.Cmd {
-	return nil
+	return tea.ClearScreen
 }
 
 func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
