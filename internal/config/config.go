@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -56,6 +57,24 @@ func (t *AITool) BuildCommand(prompt string, baseArgs []string, opts ...CommandO
 		args = append(args, "--permission-prompt-tool", "mcp__copycat-auth__handle_permission")
 	}
 	return exec.Command(t.Command, args...)
+}
+
+func (t *AITool) BuildCommandContext(ctx context.Context, prompt string, baseArgs []string, opts ...CommandOptions) *exec.Cmd {
+	args := append([]string{}, baseArgs...)
+	args = append(args, prompt)
+	if len(t.AllowedTools) > 0 {
+		args = append(args, "--allowedTools")
+		args = append(args, t.AllowedTools...)
+	}
+	if len(t.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools")
+		args = append(args, t.DisallowedTools...)
+	}
+	if t.SupportsPermissionPrompt && len(opts) > 0 && opts[0].MCPConfigPath != "" {
+		args = append(args, "--mcp-config", opts[0].MCPConfigPath)
+		args = append(args, "--permission-prompt-tool", "mcp__copycat-auth__handle_permission")
+	}
+	return exec.CommandContext(ctx, t.Command, args...)
 }
 
 type AIToolsConfig struct {

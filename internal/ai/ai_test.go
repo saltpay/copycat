@@ -1,10 +1,12 @@
 package ai
 
 import (
-	"github.com/saltpay/copycat/internal/config"
+	"context"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/saltpay/copycat/internal/config"
 )
 
 func TestGeneratePRDescriptionStderr(t *testing.T) {
@@ -19,7 +21,7 @@ func TestGeneratePRDescriptionStderr(t *testing.T) {
 	aiOutput := "some ai output"
 	targetPath, _ := os.Getwd()
 
-	_, err := GeneratePRDescription(aiTool, project, aiOutput, targetPath)
+	_, err := GeneratePRDescription(context.Background(), aiTool, project, aiOutput, targetPath)
 
 	if err == nil {
 		t.Fatal("Expected an error but got none")
