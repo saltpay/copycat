@@ -28,8 +28,9 @@ type repoWithURL struct {
 	PRURL string
 }
 
-// SendNotifications sends notifications for successful projects, grouped by Slack room
-func SendNotifications(successfulProjects []config.Project, prTitle string, prURLs map[string]string, token string) {
+// SendNotifications sends notifications for successful projects, grouped by Slack room.
+// The onStatus callback receives progress lines instead of printing to stdout.
+func SendNotifications(successfulProjects []config.Project, prTitle string, prURLs map[string]string, token string, onStatus func(string)) {
 	if len(successfulProjects) == 0 {
 		return
 	}
@@ -48,11 +49,11 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 	}
 
 	if len(projectsByRoom) == 0 {
-		fmt.Println("\n⚠️  No Slack rooms configured for successful projects, skipping notifications")
+		onStatus("⚠️  No Slack rooms configured for successful projects, skipping notifications")
 		return
 	}
 
-	fmt.Println("\nSending Slack notifications...")
+	onStatus("Sending Slack notifications...")
 
 	for channel, repos := range projectsByRoom {
 		message := formatMessage(prTitle, repos)
@@ -62,9 +63,9 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 			repoNames[i] = r.Repo
 		}
 		if err != nil {
-			fmt.Printf("⚠️  Failed to send notification to %s: %v\n", channel, err)
+			onStatus(fmt.Sprintf("⚠️  Failed to send notification to %s: %v", channel, err))
 		} else {
-			fmt.Printf("✓ Notification sent to %s for: %s\n", channel, strings.Join(repoNames, ", "))
+			onStatus(fmt.Sprintf("✓ Notification sent to %s for: %s", channel, strings.Join(repoNames, ", ")))
 		}
 	}
 }

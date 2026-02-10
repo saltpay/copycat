@@ -3,7 +3,6 @@ package git
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -35,7 +34,6 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 	}
 
 	// Add all changes
-	fmt.Printf("Committing changes...\n")
 	cmd = exec.Command("git", "add", "-A")
 	cmd.Dir = targetPath
 	_, err = cmd.CombinedOutput()
@@ -53,7 +51,6 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 	}
 
 	// Push branch
-	fmt.Printf("Pushing branch to remote...\n")
 	cmd = exec.Command("git", "push", "-u", "origin", branchName)
 	cmd.Dir = targetPath
 	output, err = cmd.CombinedOutput()
@@ -68,9 +65,7 @@ func SelectOrCreateBranch(repoPath, prTitle, branchStrategy, specifiedBranch str
 	// Fetch latest branches from remote
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
-	if _, err := fetchCmd.CombinedOutput(); err != nil {
-		log.Printf("Warning: Failed to fetch from remote: %v", err)
-	}
+	fetchCmd.CombinedOutput()
 
 	// Handle "Specify branch name (reuse if exists)" strategy
 	if strings.Contains(branchStrategy, "reuse if exists") {
@@ -112,9 +107,7 @@ func checkoutOrCreateBranch(repoPath, branchName string) (string, error) {
 	// Pull latest changes if branch already existed
 	pullCmd := exec.Command("git", "pull", "origin", branchName)
 	pullCmd.Dir = repoPath
-	if _, err := pullCmd.CombinedOutput(); err != nil {
-		log.Printf("Warning: Failed to pull latest changes: %v", err)
-	}
+	pullCmd.CombinedOutput()
 
 	return branchName, nil
 }

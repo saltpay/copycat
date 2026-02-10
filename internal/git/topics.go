@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/saltpay/copycat/internal/config"
-	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/saltpay/copycat/internal/config"
 )
 
 type repoTopicsResponse struct {
@@ -58,8 +58,7 @@ func syncProjectTopics(project config.Project, owner string, githubCfg config.Gi
 		args = append(args, "--remove-topic", t)
 	}
 
-	cmd := exec.Command("gh", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := runGh("", args...)
 	if err != nil {
 		if isNotFoundResponse(string(output)) {
 			reportTopicFailure(project.Repo)
@@ -79,8 +78,7 @@ func fetchRepositoryTopics(owner, repo string) ([]string, error) {
 		"-H", "Accept: application/vnd.github+json",
 	}
 
-	cmd := exec.Command("gh", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := runGh("", args...)
 	if err != nil {
 		outputStr := strings.TrimSpace(string(output))
 		if isNotFoundResponse(outputStr) {

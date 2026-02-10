@@ -16,6 +16,7 @@ import (
 	"github.com/saltpay/copycat/internal/filesystem"
 	"github.com/saltpay/copycat/internal/git"
 	"github.com/saltpay/copycat/internal/input"
+	"github.com/saltpay/copycat/internal/permission"
 	"github.com/saltpay/copycat/internal/slack"
 )
 
@@ -41,6 +42,7 @@ type ProcessJob struct {
 	VibeCodePrompt  string
 	BranchStrategy  string
 	SpecifiedBranch string
+	MCPConfigPath   string
 	UpdateStatus    func(status string)
 }
 
@@ -48,6 +50,7 @@ type ProcessJob struct {
 type ProcessResult struct {
 	Project config.Project
 	Success bool
+	Skipped bool
 	Error   error
 	PRURL   string
 }
@@ -74,20 +77,17 @@ func main() {
 				log.Fatal(err)
 			}
 			return
+		case "permission-handler":
+			if err := permission.RunMCPHandler(); err != nil {
+				log.Fatal(err)
+			}
+			return
 		}
 	}
 
 	// Parse command-line flags
-	parallelism := flag.Int("parallel", 3, "number of repositories to process in parallel (default: 3)")
+	parallelism := flag.Int("parallel", 0, "number of repositories to process in parallel (overrides config.yaml)")
 	flag.Parse()
-
-	// Validate parallelism value
-	if *parallelism < 1 {
-		log.Fatal("Parallelism must be at least 1")
-	}
-	if *parallelism > 10 {
-		fmt.Printf("⚠️  Warning: High parallelism (%d) may cause API rate limiting issues\n", *parallelism)
-	}
 
 	filesystem.DeleteWorkspace()
 
@@ -126,7 +126,14 @@ func main() {
 		}
 	}
 
-	par := *parallelism
+	// CLI flag overrides config value
+	if *parallelism > 0 {
+		if *parallelism > 10 {
+			*parallelism = 10
+		}
+		appConfig.Parallelism = *parallelism
+	}
+	par := appConfig.Parallelism
 
 	dashCfg := input.DashboardConfig{
 		Projects:      projects,
@@ -138,7 +145,7 @@ func main() {
 			return fetchAndSyncProjects(appConfig.GitHub)
 		},
 		ProcessRepos: func(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult) {
-			processReposWithSender(sender, selectedProjects, setup, *appConfig, par)
+			processReposWithSender(sender, selectedProjects, setup, *appConfig, par, projects)
 		},
 		CreateIssues: git.CreateGitHubIssuesWithSender,
 	}
@@ -153,23 +160,9 @@ func main() {
 		return
 	}
 
-	// Post-processing: workspace management and slack notifications
+	// Post-processing: workspace management
 	if result.Action == "local" {
 		filesystem.DeleteEmptyWorkspace()
-
-		if result.WizardResult.SendSlack {
-			var successfulProjects []config.Project
-			prURLs := make(map[string]string)
-			for _, project := range result.SelectedProjects {
-				if r, ok := result.ProcessResults[project.Repo]; ok && r.Success {
-					successfulProjects = append(successfulProjects, project)
-					prURLs[project.Repo] = r.PRURL
-				}
-			}
-			if len(successfulProjects) > 0 {
-				slack.SendNotifications(successfulProjects, result.WizardResult.PRTitle, prURLs, result.WizardResult.SlackToken)
-			}
-		}
 	}
 
 	fmt.Println("\nDone!")
@@ -329,7 +322,7 @@ func processProject(job ProcessJob) ProcessResult {
 
 	// Run AI tool
 	job.UpdateStatus("Running AI agent...")
-	aiOutput, err := ai.VibeCode(job.AITool, job.VibeCodePrompt, targetPath)
+	aiOutput, err := ai.VibeCode(job.AITool, job.VibeCodePrompt, targetPath, job.MCPConfigPath, project.Repo)
 	if err != nil {
 		cleanup()
 		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v", err)}
@@ -352,7 +345,7 @@ func processProject(job ProcessJob) ProcessResult {
 	}
 	if len(output) == 0 {
 		cleanup()
-		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("no changes detected")}
+		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected")}
 	}
 
 	// Push changes
@@ -380,8 +373,13 @@ func processProject(job ProcessJob) ProcessResult {
 	return ProcessResult{Project: project, Success: true, Error: nil, PRURL: prURL}
 }
 
-func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
+func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int, allProjects []config.Project) {
 	filesystem.CreateWorkspace()
+
+	checkpoint := parallelism
+	if checkpoint < 5 {
+		checkpoint = 5
+	}
 
 	var jobs []ProcessJob
 	for _, project := range selectedProjects {
@@ -393,6 +391,7 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 			VibeCodePrompt:  setup.Prompt,
 			BranchStrategy:  setup.BranchStrategy,
 			SpecifiedBranch: setup.BranchName,
+			MCPConfigPath:   sender.MCPConfigPath,
 		})
 	}
 
@@ -401,35 +400,88 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 		numWorkers = len(jobs)
 	}
 
-	jobCh := make(chan ProcessJob, len(jobs))
-	var wg sync.WaitGroup
+	var mu sync.Mutex
+	resultMap := make(map[string]ProcessResult)
 
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range jobCh {
-				repo := job.Project.Repo
-				job.UpdateStatus = func(status string) {
-					sender.UpdateStatus(repo, status)
-				}
-				result := processProject(job)
+	// Process in batches, pausing between them for user confirmation
+	for batchStart := 0; batchStart < len(jobs); batchStart += checkpoint {
+		batchEnd := batchStart + checkpoint
+		if batchEnd > len(jobs) {
+			batchEnd = len(jobs)
+		}
+		batch := jobs[batchStart:batchEnd]
 
-				var status string
-				if result.Success {
-					status = fmt.Sprintf("Completed ✅ PR: %s", result.PRURL)
-				} else {
-					status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+		batchWorkers := numWorkers
+		if batchWorkers > len(batch) {
+			batchWorkers = len(batch)
+		}
+
+		jobCh := make(chan ProcessJob, len(batch))
+		var wg sync.WaitGroup
+
+		for w := 0; w < batchWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for job := range jobCh {
+					repo := job.Project.Repo
+					job.UpdateStatus = func(status string) {
+						sender.UpdateStatus(repo, status)
+					}
+					result := processProject(job)
+
+					mu.Lock()
+					resultMap[repo] = result
+					mu.Unlock()
+
+					var status string
+					switch {
+					case result.Success:
+						status = fmt.Sprintf("Completed ✅ PR: %s", result.PRURL)
+					case result.Skipped:
+						status = fmt.Sprintf("Skipped ⊘ %v", result.Error)
+					default:
+						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+					}
+					sender.Done(repo, status, result.Success, result.Skipped, result.PRURL, result.Error)
 				}
-				sender.Done(repo, status, result.Success, result.PRURL, result.Error)
+			}()
+		}
+
+		for _, job := range batch {
+			jobCh <- job
+		}
+		close(jobCh)
+		wg.Wait()
+
+		// Wait for user confirmation before starting next batch
+		if batchEnd < len(jobs) && sender.ResumeCh != nil {
+			<-sender.ResumeCh
+		}
+	}
+
+	// Send Slack notifications as part of processing
+	if setup.SendSlack {
+		var successfulProjects []config.Project
+		prURLs := make(map[string]string)
+
+		// Build project lookup from the full projects list for metadata (slack_room)
+		projectMap := make(map[string]config.Project)
+		for _, p := range allProjects {
+			projectMap[p.Repo] = p
+		}
+
+		for repo, result := range resultMap {
+			if result.Success {
+				if p, ok := projectMap[repo]; ok {
+					successfulProjects = append(successfulProjects, p)
+					prURLs[repo] = result.PRURL
+				}
 			}
-		}()
-	}
+		}
 
-	for _, job := range jobs {
-		jobCh <- job
+		if len(successfulProjects) > 0 {
+			slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
+		}
 	}
-	close(jobCh)
-
-	wg.Wait()
 }

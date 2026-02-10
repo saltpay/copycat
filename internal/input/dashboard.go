@@ -1,7 +1,9 @@
 package input
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/internal/permission"
 )
 
 type dashboardPhase int
@@ -54,21 +57,32 @@ type DashboardResult struct {
 }
 
 type dashboardModel struct {
-	phase     dashboardPhase
-	cfg       DashboardConfig
-	statusCh  chan tea.Msg
-	termWidth int
+	phase      dashboardPhase
+	cfg        DashboardConfig
+	statusCh   chan tea.Msg
+	termWidth  int
+	termHeight int
 
 	// Sub-models
 	projects projectSelectorModel
 	wizard   wizardModel
 	progress progressModel
 
+	// Processing control
+	resumeCh chan struct{}
+
+	// Permission server
+	permServer *permission.PermissionServer
+	mcpCleanup func()
+
 	// Shared state
 	selectedProjects []config.Project
 	wizardResult     *WizardResult
 	processResults   map[string]ProjectDoneMsg
 	interrupted      bool
+
+	// Done screen scrolling
+	doneScrollOffset int
 }
 
 func newDashboardModel(cfg DashboardConfig) dashboardModel {
@@ -95,10 +109,12 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
+		m.termHeight = msg.Height
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			if m.phase == phaseProcessing {
 				m.interrupted = true
+				m = m.cleanupPermissionServer()
 				m.phase = phaseDone
 				return m, nil
 			}
@@ -215,13 +231,52 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		repos = append(repos, p.Repo)
 	}
 
-	m.progress = NewProgressModel(repos)
+	checkpointInterval := 0
+	if m.cfg.Parallelism > 0 && len(repos) > 0 {
+		// Only checkpoint for non-issues workflows (checked below)
+		checkpointInterval = m.cfg.Parallelism
+		if checkpointInterval < 5 {
+			checkpointInterval = 5
+		}
+	}
+
+	if m.wizardResult.Action == "issues" {
+		checkpointInterval = 0
+	}
+
+	if checkpointInterval > 0 {
+		m.resumeCh = make(chan struct{}, 1)
+	}
+
+	m.progress = NewProgressModel(repos, checkpointInterval)
 	m.phase = phaseProcessing
 
 	// Start background processing
-	sender := &StatusSender{send: func(msg tea.Msg) {
-		m.statusCh <- msg
-	}}
+	sender := &StatusSender{
+		send: func(msg tea.Msg) {
+			m.statusCh <- msg
+		},
+		ResumeCh: m.resumeCh,
+	}
+
+	// Set up permission server if the AI tool supports it
+	if m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
+		permServer, err := permission.NewPermissionServer(m.statusCh)
+		if err != nil {
+			log.Printf("⚠️ Failed to start permission server: %v", err)
+		} else {
+			m.permServer = permServer
+			mcpPath, cleanup, err := permission.GenerateMCPConfig(permServer.Port())
+			if err != nil {
+				log.Printf("⚠️ Failed to generate MCP config: %v", err)
+				permServer.Shutdown(context.Background())
+				m.permServer = nil
+			} else {
+				m.mcpCleanup = cleanup
+				sender.MCPConfigPath = mcpPath
+			}
+		}
+	}
 
 	var processFn func()
 	if m.wizardResult.Action == "issues" {
@@ -235,7 +290,10 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	go processFn()
+	go func() {
+		processFn()
+		sender.Finish()
+	}()
 
 	return m, tea.Batch(
 		m.progress.Init(),
@@ -247,14 +305,20 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg.(type) {
 	case processingDoneMsg:
 		m.processResults = m.progress.results
+		m = m.cleanupPermissionServer()
 		m.phase = phaseDone
+		return m, nil
+	case resumeProcessingMsg:
+		if m.resumeCh != nil {
+			m.resumeCh <- struct{}{}
+		}
 		return m, nil
 	}
 
 	// Pump status channel messages
 	var cmds []tea.Cmd
 	switch msg.(type) {
-	case ProjectStatusMsg, ProjectDoneMsg:
+	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg:
 		cmds = append(cmds, listenForStatus(m.statusCh))
 	}
 
@@ -267,14 +331,84 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m dashboardModel) cleanupPermissionServer() dashboardModel {
+	if m.permServer != nil {
+		m.permServer.Shutdown(context.Background())
+		m.permServer = nil
+	}
+	if m.mcpCleanup != nil {
+		m.mcpCleanup()
+		m.mcpCleanup = nil
+	}
+	return m
+}
+
 func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "q", "enter":
 			return m, tea.Quit
+		case "r":
+			// Retry only actual failures (not skipped)
+			var retryProjects []config.Project
+			for _, p := range m.selectedProjects {
+				if result, ok := m.processResults[p.Repo]; ok && !result.Success && !result.Skipped {
+					retryProjects = append(retryProjects, p)
+				}
+			}
+			if len(retryProjects) == 0 {
+				return m, nil
+			}
+			m.selectedProjects = retryProjects
+			m.doneScrollOffset = 0
+			return m.startProcessing()
+		case "a":
+			// Retry all non-success (failures + skipped)
+			var retryProjects []config.Project
+			for _, p := range m.selectedProjects {
+				if result, ok := m.processResults[p.Repo]; ok && !result.Success {
+					retryProjects = append(retryProjects, p)
+				}
+			}
+			if len(retryProjects) == 0 {
+				return m, nil
+			}
+			m.selectedProjects = retryProjects
+			m.doneScrollOffset = 0
+			return m.startProcessing()
+		case "up", "k":
+			if m.doneScrollOffset > 0 {
+				m.doneScrollOffset--
+			}
+		case "down", "j":
+			maxScroll := m.doneMaxScroll()
+			if m.doneScrollOffset < maxScroll {
+				m.doneScrollOffset++
+			}
 		}
 	}
 	return m, nil
+}
+
+// doneMaxScroll returns the maximum scroll offset for the done screen.
+func (m dashboardModel) doneMaxScroll() int {
+	total := len(m.progress.repos)
+	maxVisible := m.doneMaxVisible()
+	if total <= maxVisible {
+		return 0
+	}
+	return total - maxVisible
+}
+
+// doneMaxVisible returns how many result rows fit on screen.
+// Reserves space for: banner(3) + border(2) + header(3) + summary(2) + postLines + help(2) + padding(2).
+func (m dashboardModel) doneMaxVisible() int {
+	overhead := 14 + len(m.progress.postLines)
+	available := m.termHeight - overhead
+	if available < 5 {
+		available = 5
+	}
+	return available
 }
 
 func (m dashboardModel) View() string {
@@ -315,7 +449,10 @@ func (m dashboardModel) renderDoneSummary() string {
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
 	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	skipStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 
 	if m.interrupted {
 		b.WriteString(titleStyle.Render("Processing interrupted"))
@@ -331,34 +468,88 @@ func (m dashboardModel) renderDoneSummary() string {
 	}
 
 	succeeded := 0
+	skipped := 0
 	failed := 0
 	for _, result := range results {
-		if result.Success {
+		switch {
+		case result.Success:
 			succeeded++
-		} else {
+		case result.Skipped:
+			skipped++
+		default:
 			failed++
 		}
 	}
 
 	b.WriteString(fmt.Sprintf("  Total: %d  ", len(results)))
 	b.WriteString(successStyle.Render(fmt.Sprintf("Succeeded: %d  ", succeeded)))
+	if skipped > 0 {
+		b.WriteString(skipStyle.Render(fmt.Sprintf("Skipped: %d  ", skipped)))
+	}
 	if failed > 0 {
 		b.WriteString(failStyle.Render(fmt.Sprintf("Failed: %d", failed)))
 	}
 	b.WriteString("\n\n")
 
+	// Build the list of repos that have results
+	var visibleRepos []string
 	for _, repo := range m.progress.repos {
-		result, ok := results[repo]
-		if !ok {
-			continue
+		if _, ok := results[repo]; ok {
+			visibleRepos = append(visibleRepos, repo)
 		}
-		repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	}
+
+	// Scrolling
+	maxVisible := m.doneMaxVisible()
+	start := m.doneScrollOffset
+	end := start + maxVisible
+	if end > len(visibleRepos) {
+		end = len(visibleRepos)
+	}
+
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
+		b.WriteString("\n")
+	}
+
+	for _, repo := range visibleRepos[start:end] {
+		result := results[repo]
 		b.WriteString(fmt.Sprintf("  %s %s\n", repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
+	}
+
+	remaining := len(visibleRepos) - end
+	if remaining > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
+		b.WriteString("\n")
+	}
+
+	// Post-processing status lines
+	if len(m.progress.postLines) > 0 {
+		b.WriteString("\n")
+		for _, line := range m.progress.postLines {
+			b.WriteString("  ")
+			b.WriteString(dimStyle.Render(line))
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString("\n")
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	b.WriteString(helpStyle.Render("  Press q or enter to exit"))
+	retryStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	var hints []string
+	if failed > 0 {
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("r: retry %d failed", failed)))
+	}
+	if failed > 0 && skipped > 0 {
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry all %d", failed+skipped)))
+	} else if skipped > 0 {
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry %d skipped", skipped)))
+	}
+	hints = append(hints, helpStyle.Render("q/enter: exit"))
+	if len(visibleRepos) > maxVisible {
+		hints = append(hints, helpStyle.Render("↑↓/jk: scroll"))
+	}
+	b.WriteString("  " + strings.Join(hints, helpStyle.Render("  •  ")))
 	b.WriteString("\n")
 
 	return b.String()

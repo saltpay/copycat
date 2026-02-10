@@ -21,19 +21,40 @@ type GitHubConfig struct {
 
 type Config struct {
 	GitHub        GitHubConfig `yaml:"github"`
+	Parallelism   int          `yaml:"parallelism,omitempty"`
 	AIToolsConfig `yaml:",inline"`
 }
 
 type AITool struct {
-	Name        string   `yaml:"name"`
-	Command     string   `yaml:"command"`
-	CodeArgs    []string `yaml:"code_args"`
-	SummaryArgs []string `yaml:"summary_args"`
+	Name                     string   `yaml:"name"`
+	Command                  string   `yaml:"command"`
+	CodeArgs                 []string `yaml:"code_args"`
+	SummaryArgs              []string `yaml:"summary_args"`
+	AllowedTools             []string `yaml:"allowed_tools,omitempty"`
+	DisallowedTools          []string `yaml:"disallowed_tools,omitempty"`
+	SupportsPermissionPrompt bool     `yaml:"supports_permission_prompt,omitempty"`
 }
 
-func (t *AITool) BuildCommand(prompt string, baseArgs []string) *exec.Cmd {
+// CommandOptions holds optional flags for BuildCommand.
+type CommandOptions struct {
+	MCPConfigPath string
+}
+
+func (t *AITool) BuildCommand(prompt string, baseArgs []string, opts ...CommandOptions) *exec.Cmd {
 	args := append([]string{}, baseArgs...)
 	args = append(args, prompt)
+	if len(t.AllowedTools) > 0 {
+		args = append(args, "--allowedTools")
+		args = append(args, t.AllowedTools...)
+	}
+	if len(t.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools")
+		args = append(args, t.DisallowedTools...)
+	}
+	if t.SupportsPermissionPrompt && len(opts) > 0 && opts[0].MCPConfigPath != "" {
+		args = append(args, "--mcp-config", opts[0].MCPConfigPath)
+		args = append(args, "--permission-prompt-tool", "mcp__copycat-auth__handle_permission")
+	}
 	return exec.Command(t.Command, args...)
 }
 
@@ -55,6 +76,13 @@ func Load(filename string) (*Config, error) {
 
 	if cfg.GitHub.Organization == "" {
 		return nil, fmt.Errorf("organization is required in %s", filename)
+	}
+
+	if cfg.Parallelism <= 0 {
+		cfg.Parallelism = 3
+	}
+	if cfg.Parallelism > 10 {
+		cfg.Parallelism = 10
 	}
 
 	if len(cfg.AIToolsConfig.Tools) == 0 {
@@ -110,7 +138,7 @@ func (c *Config) Save(filename string) error {
 	// Combine with blank lines between sections
 	data := string(githubData) + "\n" + string(toolsData)
 
-	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filename, []byte(data), 0o600); err != nil {
 		return fmt.Errorf("failed to write config to %s: %w", filename, err)
 	}
 
@@ -141,7 +169,7 @@ func SaveProjects(filename string, projects []Project) error {
 		return fmt.Errorf("failed to encode projects: %w", err)
 	}
 
-	if err := os.WriteFile(filename, data, 0o644); err != nil {
+	if err := os.WriteFile(filename, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write projects to %s: %w", filename, err)
 	}
 

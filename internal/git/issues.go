@@ -2,7 +2,6 @@ package git
 
 import (
 	"fmt"
-	"os/exec"
 
 	"github.com/saltpay/copycat/internal/config"
 	"github.com/saltpay/copycat/internal/input"
@@ -14,21 +13,19 @@ func CreateGitHubIssuesWithSender(sender *input.StatusSender, githubCfg config.G
 		sender.UpdateStatus(project.Repo, "Creating issue...")
 		err := createGitHubIssueWithCLI(githubCfg, project, issueTitle, issueDescription)
 		if err != nil {
-			sender.Done(project.Repo, fmt.Sprintf("Failed ⚠️ %v", err), false, "", err)
+			sender.Done(project.Repo, fmt.Sprintf("Failed ⚠️ %v", err), false, false, "", err)
 		} else {
-			sender.Done(project.Repo, "Issue created ✅", true, "", nil)
+			sender.Done(project.Repo, "Issue created ✅", true, false, "", nil)
 		}
 	}
 }
 
 func createGitHubIssueWithCLI(githubCfg config.GitHubConfig, project config.Project, title string, description string) error {
-	cmd := exec.Command("gh", "issue", "create",
+	output, err := runGh("", "issue", "create",
 		"--repo", fmt.Sprintf("%s/%s", githubCfg.Organization, project.Repo),
 		"--title", title,
 		"--body", description,
 		"--assignee", "@copilot")
-
-	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create issue: %v\nOutput: %s", err, string(output))
 	}
