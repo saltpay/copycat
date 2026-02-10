@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -14,15 +15,15 @@ import (
 // ErrBranchExists is returned when a branch already exists and the skip strategy is used.
 var ErrBranchExists = errors.New("branch already exists")
 
-func CheckLocalChanges(targetPath string) ([]byte, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
+func CheckLocalChanges(ctx context.Context, targetPath string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = targetPath
 	return cmd.CombinedOutput()
 }
 
-func PushChanges(project config.Project, targetPath string, branchName string, prTitle string) error {
+func PushChanges(ctx context.Context, project config.Project, targetPath string, branchName string, prTitle string) error {
 	// Check if there are changes to commit
-	cmd := exec.Command("git", "status", "--porcelain")
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	cmd.Dir = targetPath
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -34,7 +35,7 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 	}
 
 	// Add all changes
-	cmd = exec.Command("git", "add", "-A")
+	cmd = exec.CommandContext(ctx, "git", "add", "-A")
 	cmd.Dir = targetPath
 	_, err = cmd.CombinedOutput()
 	if err != nil {
@@ -43,7 +44,7 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 
 	// Commit changes
 	commitMessage := prTitle
-	cmd = exec.Command("git", "commit", "-m", commitMessage)
+	cmd = exec.CommandContext(ctx, "git", "commit", "-m", commitMessage)
 	cmd.Dir = targetPath
 	output, err = cmd.CombinedOutput()
 	if err != nil {
@@ -51,7 +52,7 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 	}
 
 	// Push branch
-	cmd = exec.Command("git", "push", "-u", "origin", branchName)
+	cmd = exec.CommandContext(ctx, "git", "push", "-u", "origin", branchName)
 	cmd.Dir = targetPath
 	output, err = cmd.CombinedOutput()
 	if err != nil {
@@ -61,40 +62,40 @@ func PushChanges(project config.Project, targetPath string, branchName string, p
 	return nil
 }
 
-func SelectOrCreateBranch(repoPath, prTitle, branchStrategy, specifiedBranch string) (string, error) {
+func SelectOrCreateBranch(ctx context.Context, repoPath, prTitle, branchStrategy, specifiedBranch string) (string, error) {
 	// Fetch latest branches from remote
-	fetchCmd := exec.Command("git", "fetch", "origin")
+	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
 	fetchCmd.CombinedOutput()
 
 	// Handle "Specify branch name (reuse if exists)" strategy
 	if strings.Contains(branchStrategy, "reuse if exists") {
-		return checkoutOrCreateBranch(repoPath, specifiedBranch)
+		return checkoutOrCreateBranch(ctx, repoPath, specifiedBranch)
 	}
 
 	// Handle "Specify branch name (skip if exists)" strategy
 	if strings.Contains(branchStrategy, "skip if exists") {
-		return createBranchOrSkip(repoPath, specifiedBranch)
+		return createBranchOrSkip(ctx, repoPath, specifiedBranch)
 	}
 
 	// Handle "Always create new" strategy (default)
-	return createNewBranch(repoPath, prTitle)
+	return createNewBranch(ctx, repoPath, prTitle)
 }
 
 // checkoutOrCreateBranch checks out a branch if it exists, or creates it if it doesn't
-func checkoutOrCreateBranch(repoPath, branchName string) (string, error) {
+func checkoutOrCreateBranch(ctx context.Context, repoPath, branchName string) (string, error) {
 	// Try to checkout the branch
-	checkoutCmd := exec.Command("git", "checkout", branchName)
+	checkoutCmd := exec.CommandContext(ctx, "git", "checkout", branchName)
 	checkoutCmd.Dir = repoPath
 	output, err := checkoutCmd.CombinedOutput()
 	if err != nil {
 		// If local checkout fails, try checking out from remote
-		checkoutCmd = exec.Command("git", "checkout", "-b", branchName, fmt.Sprintf("origin/%s", branchName))
+		checkoutCmd = exec.CommandContext(ctx, "git", "checkout", "-b", branchName, fmt.Sprintf("origin/%s", branchName))
 		checkoutCmd.Dir = repoPath
 		output, err = checkoutCmd.CombinedOutput()
 		if err != nil {
 			// Branch doesn't exist locally or remotely, create it
-			createCmd := exec.Command("git", "checkout", "-b", branchName)
+			createCmd := exec.CommandContext(ctx, "git", "checkout", "-b", branchName)
 			createCmd.Dir = repoPath
 			output, err = createCmd.CombinedOutput()
 			if err != nil {
@@ -105,7 +106,7 @@ func checkoutOrCreateBranch(repoPath, branchName string) (string, error) {
 	}
 
 	// Pull latest changes if branch already existed
-	pullCmd := exec.Command("git", "pull", "origin", branchName)
+	pullCmd := exec.CommandContext(ctx, "git", "pull", "origin", branchName)
 	pullCmd.Dir = repoPath
 	pullCmd.CombinedOutput()
 
@@ -113,12 +114,12 @@ func checkoutOrCreateBranch(repoPath, branchName string) (string, error) {
 }
 
 // createBranchOrSkip creates a new branch, or returns ErrBranchExists if it already exists locally or remotely.
-func createBranchOrSkip(repoPath, branchName string) (string, error) {
-	if branchExistsLocally(repoPath, branchName) || branchExistsRemotely(repoPath, branchName) {
+func createBranchOrSkip(ctx context.Context, repoPath, branchName string) (string, error) {
+	if branchExistsLocally(ctx, repoPath, branchName) || branchExistsRemotely(ctx, repoPath, branchName) {
 		return "", fmt.Errorf("%w: %s", ErrBranchExists, branchName)
 	}
 
-	createCmd := exec.Command("git", "checkout", "-b", branchName)
+	createCmd := exec.CommandContext(ctx, "git", "checkout", "-b", branchName)
 	createCmd.Dir = repoPath
 	output, err := createCmd.CombinedOutput()
 	if err != nil {
@@ -127,20 +128,20 @@ func createBranchOrSkip(repoPath, branchName string) (string, error) {
 	return branchName, nil
 }
 
-func branchExistsLocally(repoPath, branchName string) bool {
-	cmd := exec.Command("git", "rev-parse", "--verify", branchName)
+func branchExistsLocally(ctx context.Context, repoPath, branchName string) bool {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", branchName)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
 }
 
-func branchExistsRemotely(repoPath, branchName string) bool {
-	cmd := exec.Command("git", "rev-parse", "--verify", fmt.Sprintf("origin/%s", branchName))
+func branchExistsRemotely(ctx context.Context, repoPath, branchName string) bool {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", fmt.Sprintf("origin/%s", branchName))
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
 }
 
 // createNewBranch creates a new branch with timestamp and slug
-func createNewBranch(repoPath, prTitle string) (string, error) {
+func createNewBranch(ctx context.Context, repoPath, prTitle string) (string, error) {
 	timestamp := time.Now().Format("20060102-150405")
 	slug := util.CreateSlugFromTitle(prTitle)
 
@@ -152,7 +153,7 @@ func createNewBranch(repoPath, prTitle string) (string, error) {
 		newBranch = fmt.Sprintf("copycat-%s", timestamp)
 	}
 
-	cmd := exec.Command("git", "checkout", "-b", newBranch)
+	cmd := exec.CommandContext(ctx, "git", "checkout", "-b", newBranch)
 	cmd.Dir = repoPath
 	output, err := cmd.CombinedOutput()
 	if err != nil {

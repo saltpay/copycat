@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,6 +36,7 @@ var projectsPath string
 
 // ProcessJob represents a single project processing job
 type ProcessJob struct {
+	Ctx             context.Context
 	Project         config.Project
 	AITool          *config.AITool
 	AppConfig       config.Config
@@ -291,8 +293,12 @@ func mergeProjects(existing, fetched []config.Project) []config.Project {
 	return merged
 }
 
+// errCancelled is a sentinel error for cancelled projects.
+var errCancelled = fmt.Errorf("cancelled")
+
 // processProject handles the processing of a single project
 func processProject(job ProcessJob) ProcessResult {
+	ctx := job.Ctx
 	project := job.Project
 	targetPath := fmt.Sprintf("%s/%s", reposDir, project.Repo)
 
@@ -300,47 +306,87 @@ func processProject(job ProcessJob) ProcessResult {
 		filesystem.DeleteDirectory(targetPath)
 	}
 
+	// Check for cancellation before each major step
+	if ctx.Err() != nil {
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
+	}
+
 	// Clone the repository if it doesn't exist
 	job.UpdateStatus("Cloning...")
 	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
 		repoURL := fmt.Sprintf("git@github.com:%s/%s.git", job.AppConfig.GitHub.Organization, project.Repo)
-		cmd := exec.Command("git", "clone", repoURL, targetPath)
+		cmd := exec.CommandContext(ctx, "git", "clone", repoURL, targetPath)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			cleanup()
+			if ctx.Err() != nil {
+				return ProcessResult{Project: project, Success: false, Error: errCancelled}
+			}
 			return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("clone failed: %v (%s)", err, string(output))}
 		}
 	}
 
+	if ctx.Err() != nil {
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
+	}
+
 	// Select or create branch based on strategy
 	job.UpdateStatus("Creating branch...")
-	branchName, err := git.SelectOrCreateBranch(targetPath, job.PRTitle, job.BranchStrategy, job.SpecifiedBranch)
+	branchName, err := git.SelectOrCreateBranch(ctx, targetPath, job.PRTitle, job.BranchStrategy, job.SpecifiedBranch)
 	if err != nil {
 		cleanup()
+		if ctx.Err() != nil {
+			return ProcessResult{Project: project, Success: false, Error: errCancelled}
+		}
 		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	if ctx.Err() != nil {
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
 	}
 
 	// Run AI tool
 	job.UpdateStatus("Running AI agent...")
-	aiOutput, err := ai.VibeCode(job.AITool, job.VibeCodePrompt, targetPath, job.MCPConfigPath, project.Repo)
+	aiOutput, err := ai.VibeCode(ctx, job.AITool, job.VibeCodePrompt, targetPath, job.MCPConfigPath, project.Repo)
 	if err != nil {
 		cleanup()
+		if ctx.Err() != nil {
+			return ProcessResult{Project: project, Success: false, Error: errCancelled}
+		}
 		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v", err)}
+	}
+
+	if ctx.Err() != nil {
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
 	}
 
 	// Generate PR description
 	job.UpdateStatus("Generating PR description...")
-	prDescription, err := ai.GeneratePRDescription(job.AITool, project, aiOutput, targetPath)
+	prDescription, err := ai.GeneratePRDescription(ctx, job.AITool, project, aiOutput, targetPath)
 	if err != nil {
 		cleanup()
+		if ctx.Err() != nil {
+			return ProcessResult{Project: project, Success: false, Error: errCancelled}
+		}
 		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	if ctx.Err() != nil {
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
 	}
 
 	// Check if there are changes to commit
 	job.UpdateStatus("Checking for changes...")
-	output, err := git.CheckLocalChanges(targetPath)
+	output, err := git.CheckLocalChanges(ctx, targetPath)
 	if err != nil {
 		cleanup()
+		if ctx.Err() != nil {
+			return ProcessResult{Project: project, Success: false, Error: errCancelled}
+		}
 		return ProcessResult{Project: project, Success: false, Error: err}
 	}
 	if len(output) == 0 {
@@ -348,19 +394,35 @@ func processProject(job ProcessJob) ProcessResult {
 		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected")}
 	}
 
+	if ctx.Err() != nil {
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
+	}
+
 	// Push changes
 	job.UpdateStatus("Pushing changes...")
-	err = git.PushChanges(project, targetPath, branchName, job.PRTitle)
+	err = git.PushChanges(ctx, project, targetPath, branchName, job.PRTitle)
 	if err != nil {
 		cleanup()
+		if ctx.Err() != nil {
+			return ProcessResult{Project: project, Success: false, Error: errCancelled}
+		}
 		return ProcessResult{Project: project, Success: false, Error: err}
+	}
+
+	if ctx.Err() != nil {
+		cleanup()
+		return ProcessResult{Project: project, Success: false, Error: errCancelled}
 	}
 
 	// Create pull request
 	job.UpdateStatus("Creating PR...")
-	prOutput, err := git.CreatePullRequest(project, targetPath, branchName, job.PRTitle, prDescription)
+	prOutput, err := git.CreatePullRequest(ctx, project, targetPath, branchName, job.PRTitle, prDescription)
 	if err != nil {
 		cleanup()
+		if ctx.Err() != nil {
+			return ProcessResult{Project: project, Success: false, Error: errCancelled}
+		}
 		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("PR creation failed: %v (%s)", err, string(prOutput))}
 	}
 
@@ -383,7 +445,15 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 
 	var jobs []ProcessJob
 	for _, project := range selectedProjects {
+		ctx, cancel := context.WithCancel(context.Background())
+		if sender.CancelRegistry != nil {
+			sender.CancelRegistry.Register(project.Repo, cancel)
+		} else {
+			cancel() // no registry; context unused, release immediately
+			ctx = context.Background()
+		}
 		jobs = append(jobs, ProcessJob{
+			Ctx:             ctx,
 			Project:         project,
 			AITool:          setup.AITool,
 			AppConfig:       appCfg,
@@ -440,6 +510,8 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 						status = fmt.Sprintf("Completed ✅ PR: %s", result.PRURL)
 					case result.Skipped:
 						status = fmt.Sprintf("Skipped ⊘ %v", result.Error)
+					case result.Error == errCancelled:
+						status = "Cancelled ✗"
 					default:
 						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
 					}

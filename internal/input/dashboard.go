@@ -69,7 +69,8 @@ type dashboardModel struct {
 	progress progressModel
 
 	// Processing control
-	resumeCh chan struct{}
+	resumeCh       chan struct{}
+	cancelRegistry *CancelRegistry
 
 	// Permission server
 	permServer *permission.PermissionServer
@@ -248,7 +249,9 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		m.resumeCh = make(chan struct{}, 1)
 	}
 
+	m.cancelRegistry = &CancelRegistry{}
 	m.progress = NewProgressModel(repos, checkpointInterval)
+	m.progress.cancelRegistry = m.cancelRegistry
 	m.phase = phaseProcessing
 
 	// Start background processing
@@ -256,7 +259,8 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		send: func(msg tea.Msg) {
 			m.statusCh <- msg
 		},
-		ResumeCh: m.resumeCh,
+		ResumeCh:       m.resumeCh,
+		CancelRegistry: m.cancelRegistry,
 	}
 
 	// Set up permission server if the AI tool supports it
@@ -302,7 +306,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 }
 
 func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case processingDoneMsg:
 		m.processResults = m.progress.results
 		m = m.cleanupPermissionServer()
@@ -311,6 +315,13 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resumeProcessingMsg:
 		if m.resumeCh != nil {
 			m.resumeCh <- struct{}{}
+		}
+		return m, nil
+	case cancelProjectMsg:
+		if m.cancelRegistry != nil {
+			m.cancelRegistry.Cancel(msg.Repo)
+			m.progress.cancelled[msg.Repo] = true
+			m.progress.statuses[msg.Repo] = "Cancelling..."
 		}
 		return m, nil
 	}
@@ -467,15 +478,20 @@ func (m dashboardModel) renderDoneSummary() string {
 		results = m.progress.results
 	}
 
+	cancelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
 	succeeded := 0
 	skipped := 0
 	failed := 0
+	cancelled := 0
 	for _, result := range results {
 		switch {
 		case result.Success:
 			succeeded++
 		case result.Skipped:
 			skipped++
+		case result.Error != nil && result.Error.Error() == "cancelled":
+			cancelled++
 		default:
 			failed++
 		}
@@ -485,6 +501,9 @@ func (m dashboardModel) renderDoneSummary() string {
 	b.WriteString(successStyle.Render(fmt.Sprintf("Succeeded: %d  ", succeeded)))
 	if skipped > 0 {
 		b.WriteString(skipStyle.Render(fmt.Sprintf("Skipped: %d  ", skipped)))
+	}
+	if cancelled > 0 {
+		b.WriteString(cancelStyle.Render(fmt.Sprintf("Cancelled: %d  ", cancelled)))
 	}
 	if failed > 0 {
 		b.WriteString(failStyle.Render(fmt.Sprintf("Failed: %d", failed)))

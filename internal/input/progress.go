@@ -1,9 +1,11 @@
 package input
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,11 +15,35 @@ import (
 
 const maxVisibleProjects = 10
 
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// CancelRegistry is a thread-safe map of repo -> context.CancelFunc.
+type CancelRegistry struct {
+	funcs sync.Map
+}
+
+// Register stores a cancel function for a repo.
+func (r *CancelRegistry) Register(repo string, cancel context.CancelFunc) {
+	r.funcs.Store(repo, cancel)
+}
+
+// Cancel calls and removes the cancel function for a repo.
+func (r *CancelRegistry) Cancel(repo string) {
+	if val, ok := r.funcs.LoadAndDelete(repo); ok {
+		val.(context.CancelFunc)()
+	}
+}
+
 // processingDoneMsg signals that all projects have finished processing.
 type processingDoneMsg struct{}
 
 // resumeProcessingMsg signals that the user has confirmed to continue processing.
 type resumeProcessingMsg struct{}
+
+// cancelProjectMsg requests cancellation of a single project.
+type cancelProjectMsg struct {
+	Repo string
+}
 
 // ProjectStatusMsg updates the status line for a single project.
 type ProjectStatusMsg struct {
@@ -42,9 +68,10 @@ type PostStatusMsg struct {
 
 // StatusSender sends status updates to the progress dashboard.
 type StatusSender struct {
-	send          func(tea.Msg)
-	ResumeCh      chan struct{}
-	MCPConfigPath string
+	send           func(tea.Msg)
+	ResumeCh       chan struct{}
+	MCPConfigPath  string
+	CancelRegistry *CancelRegistry
 }
 
 // UpdateStatus updates the status line for a project.
@@ -90,9 +117,17 @@ type progressModel struct {
 	checkpointInterval int
 	nextCheckpoint     int
 
-	// Manual scrolling (overrides auto-anchor)
+	// Spinner animation
+	tickCount int
+
+	// Cursor-based navigation (tracks by repo name for stability)
+	cursorRepo   string
 	manualScroll bool
 	scrollOffset int
+
+	// Cancel support
+	cancelRegistry *CancelRegistry
+	cancelled      map[string]bool
 
 	// Permission prompting
 	permissionQueue   []permission.PermissionRequest
@@ -108,6 +143,10 @@ func NewProgressModel(repos []string, checkpointInterval int) progressModel {
 	for _, repo := range repos {
 		statuses[repo] = "Waiting..."
 	}
+	var cursorRepo string
+	if len(repos) > 0 {
+		cursorRepo = repos[0]
+	}
 	return progressModel{
 		repos:              repos,
 		statuses:           statuses,
@@ -116,6 +155,8 @@ func NewProgressModel(repos []string, checkpointInterval int) progressModel {
 		startTime:          time.Now(),
 		checkpointInterval: checkpointInterval,
 		nextCheckpoint:     checkpointInterval,
+		cursorRepo:         cursorRepo,
+		cancelled:          make(map[string]bool),
 		approvedPatterns:   make(map[string]bool),
 	}
 }
@@ -127,7 +168,7 @@ func (m progressModel) Init() tea.Cmd {
 type tickMsg time.Time
 
 func (m progressModel) tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -142,7 +183,6 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statuses[msg.Repo] = msg.Status
 		m.results[msg.Repo] = msg
 		m.completed++
-		m.manualScroll = false
 		if m.checkpointInterval > 0 && m.completed < m.total && m.completed >= m.nextCheckpoint {
 			m.paused = true
 		}
@@ -151,6 +191,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case permission.PermissionRequestMsg:
 		return m.handlePermissionRequest(msg.Request)
 	case tickMsg:
+		m.tickCount++
 		return m, m.tickCmd()
 	case tea.KeyMsg:
 		// Permission input takes priority
@@ -167,23 +208,65 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitted = true
 			return m, tea.Quit
 		case "up", "k":
-			m.manualScroll = true
-			if m.scrollOffset > 0 {
-				m.scrollOffset--
-			}
+			m.moveCursor(-1)
 		case "down", "j":
-			m.manualScroll = true
-			sorted := m.sortedRepos()
-			maxOffset := len(sorted) - maxVisibleProjects
-			if maxOffset < 0 {
-				maxOffset = 0
+			m.moveCursor(1)
+		case "x":
+			if m.cursorRepo != "" && !m.isCancellable(m.cursorRepo) {
+				break
 			}
-			if m.scrollOffset < maxOffset {
-				m.scrollOffset++
+			if m.cursorRepo != "" {
+				return m, func() tea.Msg { return cancelProjectMsg{Repo: m.cursorRepo} }
 			}
 		}
 	}
 	return m, nil
+}
+
+// isCancellable returns true if the repo can be cancelled (not completed, not already cancelled).
+func (m progressModel) isCancellable(repo string) bool {
+	if _, done := m.results[repo]; done {
+		return false
+	}
+	if m.cancelled[repo] {
+		return false
+	}
+	return true
+}
+
+// moveCursor moves the cursor up or down by delta positions in the sorted list.
+func (m *progressModel) moveCursor(delta int) {
+	sorted := m.sortedRepos()
+	if len(sorted) == 0 {
+		return
+	}
+
+	// Find current cursor position in sorted list
+	curIdx := 0
+	for i, repo := range sorted {
+		if repo == m.cursorRepo {
+			curIdx = i
+			break
+		}
+	}
+
+	newIdx := curIdx + delta
+	if newIdx < 0 {
+		newIdx = 0
+	}
+	if newIdx >= len(sorted) {
+		newIdx = len(sorted) - 1
+	}
+
+	m.cursorRepo = sorted[newIdx]
+	m.manualScroll = true
+
+	// Adjust scroll offset to keep cursor visible
+	if newIdx < m.scrollOffset {
+		m.scrollOffset = newIdx
+	} else if newIdx >= m.scrollOffset+maxVisibleProjects {
+		m.scrollOffset = newIdx - maxVisibleProjects + 1
+	}
 }
 
 func (m progressModel) handlePermissionRequest(req permission.PermissionRequest) (tea.Model, tea.Cmd) {
@@ -363,9 +446,20 @@ func (m progressModel) View() string {
 	}
 
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
 	for _, repo := range sorted[start:end] {
 		status := m.statuses[repo]
-		b.WriteString(fmt.Sprintf("%s %s\n", repoStyle.Render(fmt.Sprintf("[%s]", repo)), status))
+		isCursor := repo == m.cursorRepo
+
+		prefix := "  "
+		if isCursor {
+			prefix = cursorStyle.Render("▸") + " "
+		} else if m.statusPriority(repo) == 1 {
+			prefix = spinnerStyle.Render(frame) + " "
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), status))
 	}
 
 	remaining := len(sorted) - end
@@ -384,6 +478,19 @@ func (m progressModel) View() string {
 			b.WriteString("\n")
 		}
 	}
+
+	// Help hints
+	b.WriteString("\n")
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	var hints []string
+	hints = append(hints, helpStyle.Render("↑↓: navigate"))
+	if m.cursorRepo != "" && m.isCancellable(m.cursorRepo) {
+		cancelHintStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		hints = append(hints, cancelHintStyle.Render("x: cancel"))
+	}
+	hints = append(hints, helpStyle.Render("ctrl+c: abort all"))
+	b.WriteString("  " + strings.Join(hints, helpStyle.Render("  •  ")))
+	b.WriteString("\n")
 
 	return b.String()
 }
