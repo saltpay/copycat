@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	maxVisibleRows = 15
+	maxVisibleRows = 10
 	maxColumns     = 3
 )
 
