@@ -44,16 +44,18 @@ type DashboardConfig struct {
 	Parallelism   int
 	FetchProjects func() ([]config.Project, error)
 	ProcessRepos  func(sender *StatusSender, projects []config.Project, setup *WizardResult)
-	CreateIssues  func(sender *StatusSender, githubCfg config.GitHubConfig, projects []config.Project, title, desc string)
+	AssessRepos   func(sender *StatusSender, projects []config.Project, setup *WizardResult)
 }
 
 // DashboardResult holds everything the caller needs after the dashboard exits.
 type DashboardResult struct {
-	Action           string
-	SelectedProjects []config.Project
-	WizardResult     *WizardResult
-	ProcessResults   map[string]ProjectDoneMsg
-	Interrupted      bool
+	Action             string
+	SelectedProjects   []config.Project
+	WizardResult       *WizardResult
+	ProcessResults     map[string]ProjectDoneMsg
+	Interrupted        bool
+	AssessmentSummary  string
+	AssessmentFindings map[string]string
 }
 
 type dashboardModel struct {
@@ -81,6 +83,10 @@ type dashboardModel struct {
 	wizardResult     *WizardResult
 	processResults   map[string]ProjectDoneMsg
 	interrupted      bool
+
+	// Assessment results
+	assessmentSummary  string
+	assessmentFindings map[string]string
 
 	// Done screen scrolling
 	doneScrollOffset int
@@ -188,6 +194,9 @@ func (m dashboardModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.wizard.prompt = msg.Content
 		m.wizard.promptInput.Blur()
+		if m.wizard.action == "assessment" {
+			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.wizard.buildResult()} }
+		}
 		m.wizard.currentStep = stepSlackNotify
 		return m, nil
 	}
@@ -241,16 +250,12 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.wizardResult.Action == "issues" {
-		checkpointInterval = 0
-	}
-
 	if checkpointInterval > 0 {
 		m.resumeCh = make(chan struct{}, 1)
 	}
 
 	m.cancelRegistry = &CancelRegistry{}
-	m.progress = NewProgressModel(repos, checkpointInterval)
+	m.progress = NewProgressModel(repos, checkpointInterval, m.wizardResult.BranchName, m.wizardResult.PRTitle, m.wizardResult.Prompt)
 	m.progress.cancelRegistry = m.cancelRegistry
 	m.phase = phaseProcessing
 
@@ -263,8 +268,8 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		CancelRegistry: m.cancelRegistry,
 	}
 
-	// Set up permission server if the AI tool supports it
-	if m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
+	// Set up permission server if the AI tool supports it (skip for assessment — read-only)
+	if m.wizardResult.Action != "assessment" && m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
 		permServer, err := permission.NewPermissionServer(m.statusCh)
 		if err != nil {
 			log.Printf("⚠️ Failed to start permission server: %v", err)
@@ -283,12 +288,12 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 	}
 
 	var processFn func()
-	if m.wizardResult.Action == "issues" {
+	switch m.wizardResult.Action {
+	case "assessment":
 		processFn = func() {
-			m.cfg.CreateIssues(sender, m.cfg.GitHubConfig, m.selectedProjects,
-				m.wizardResult.IssueTitle, m.wizardResult.IssueDescription)
+			m.cfg.AssessRepos(sender, m.selectedProjects, m.wizardResult)
 		}
-	} else {
+	default:
 		processFn = func() {
 			m.cfg.ProcessRepos(sender, m.selectedProjects, m.wizardResult)
 		}
@@ -326,10 +331,16 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle assessment results
+	if ar, ok := msg.(AssessmentResultMsg); ok {
+		m.assessmentSummary = ar.Summary
+		m.assessmentFindings = ar.Findings
+	}
+
 	// Pump status channel messages
 	var cmds []tea.Cmd
 	switch msg.(type) {
-	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg:
+	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, AssessmentResultMsg:
 		cmds = append(cmds, listenForStatus(m.statusCh))
 	}
 
@@ -403,12 +414,30 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // doneMaxScroll returns the maximum scroll offset for the done screen.
 func (m dashboardModel) doneMaxScroll() int {
-	total := len(m.progress.repos)
+	total := m.doneContentLineCount()
 	maxVisible := m.doneMaxVisible()
 	if total <= maxVisible {
 		return 0
 	}
 	return total - maxVisible
+}
+
+// doneContentLineCount returns the number of scrollable content lines for the done screen.
+func (m dashboardModel) doneContentLineCount() int {
+	if m.wizardResult != nil && m.wizardResult.Action == "assessment" {
+		return len(m.assessmentContentLines())
+	}
+	results := m.processResults
+	if results == nil {
+		results = m.progress.results
+	}
+	count := 0
+	for _, repo := range m.progress.repos {
+		if _, ok := results[repo]; ok {
+			count++
+		}
+	}
+	return count
 }
 
 // doneMaxVisible returns how many result rows fit on screen.
@@ -456,6 +485,10 @@ func (m dashboardModel) View() string {
 }
 
 func (m dashboardModel) renderDoneSummary() string {
+	if m.wizardResult != nil && m.wizardResult.Action == "assessment" {
+		return m.renderAssessmentSummary()
+	}
+
 	var b strings.Builder
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
@@ -574,6 +607,123 @@ func (m dashboardModel) renderDoneSummary() string {
 	return b.String()
 }
 
+// assessmentContentLines builds the combined scrollable lines for the assessment report:
+// summary text lines, a blank separator, then per-repo findings.
+func (m dashboardModel) assessmentContentLines() []string {
+	summaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+
+	results := m.processResults
+	if results == nil {
+		results = m.progress.results
+	}
+
+	var lines []string
+
+	// Summary paragraph lines
+	if m.assessmentSummary != "" {
+		for _, line := range strings.Split(m.assessmentSummary, "\n") {
+			lines = append(lines, summaryStyle.Render(line))
+		}
+		lines = append(lines, "") // blank separator
+	}
+
+	// Per-repo findings
+	for _, repo := range m.progress.repos {
+		result, ok := results[repo]
+		if !ok {
+			continue
+		}
+		if result.Success {
+			finding := m.assessmentFindings[repo]
+			if len(finding) > 120 {
+				finding = finding[:117] + "..."
+			}
+			finding = strings.ReplaceAll(finding, "\n", " ")
+			lines = append(lines, fmt.Sprintf("  %s %s", repoStyle.Render(fmt.Sprintf("[%s]", repo)), finding))
+		} else {
+			lines = append(lines, fmt.Sprintf("  %s %s", repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
+		}
+	}
+
+	return lines
+}
+
+func (m dashboardModel) renderAssessmentSummary() string {
+	var b strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
+	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+
+	b.WriteString(titleStyle.Render("Assessment Complete!"))
+	b.WriteString("\n\n")
+
+	results := m.processResults
+	if results == nil {
+		results = m.progress.results
+	}
+
+	succeeded := 0
+	failed := 0
+	for _, result := range results {
+		if result.Success {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+
+	b.WriteString(fmt.Sprintf("  Total: %d  ", len(results)))
+	b.WriteString(successStyle.Render(fmt.Sprintf("Succeeded: %d  ", succeeded)))
+	if failed > 0 {
+		b.WriteString(failStyle.Render(fmt.Sprintf("Failed: %d", failed)))
+	}
+	b.WriteString("\n\n")
+
+	// Scrollable content: summary + repo findings
+	contentLines := m.assessmentContentLines()
+	maxVisible := m.doneMaxVisible()
+	start := m.doneScrollOffset
+	end := start + maxVisible
+	if end > len(contentLines) {
+		end = len(contentLines)
+	}
+
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
+		b.WriteString("\n")
+	}
+
+	for _, line := range contentLines[start:end] {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	remaining := len(contentLines) - end
+	if remaining > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	retryStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	var hints []string
+	if failed > 0 {
+		hints = append(hints, retryStyle.Render(fmt.Sprintf("r: retry %d failed", failed)))
+	}
+	hints = append(hints, helpStyle.Render("q/enter: exit"))
+	if len(contentLines) > maxVisible {
+		hints = append(hints, helpStyle.Render("↑↓/jk: scroll"))
+	}
+	b.WriteString("  " + strings.Join(hints, helpStyle.Render("  •  ")))
+	b.WriteString("\n")
+
+	return b.String()
+}
+
 // RunDashboard is the single entry point that replaces all standalone tea.Program calls.
 func RunDashboard(cfg DashboardConfig) (*DashboardResult, error) {
 	model := newDashboardModel(cfg)
@@ -610,10 +760,12 @@ func RunDashboard(cfg DashboardConfig) (*DashboardResult, error) {
 	}
 
 	return &DashboardResult{
-		Action:           m.wizardResult.Action,
-		SelectedProjects: m.selectedProjects,
-		WizardResult:     m.wizardResult,
-		ProcessResults:   results,
-		Interrupted:      m.interrupted,
+		Action:             m.wizardResult.Action,
+		SelectedProjects:   m.selectedProjects,
+		WizardResult:       m.wizardResult,
+		ProcessResults:     results,
+		Interrupted:        m.interrupted,
+		AssessmentSummary:  m.assessmentSummary,
+		AssessmentFindings: m.assessmentFindings,
 	}, nil
 }

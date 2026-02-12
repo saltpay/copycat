@@ -149,7 +149,9 @@ func main() {
 		ProcessRepos: func(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult) {
 			processReposWithSender(sender, selectedProjects, setup, *appConfig, par, projects)
 		},
-		CreateIssues: git.CreateGitHubIssuesWithSender,
+		AssessRepos: func(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult) {
+			assessReposWithSender(sender, selectedProjects, setup, *appConfig, par)
+		},
 	}
 
 	result, err := input.RunDashboard(dashCfg)
@@ -163,7 +165,7 @@ func main() {
 	}
 
 	// Post-processing: workspace management
-	if result.Action == "local" {
+	if result.Action == "local" || result.Action == "assessment" {
 		filesystem.DeleteEmptyWorkspace()
 	}
 
@@ -555,5 +557,185 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 		if len(successfulProjects) > 0 {
 			slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
 		}
+	}
+}
+
+// AssessJob represents a single project assessment job.
+type AssessJob struct {
+	Ctx          context.Context
+	Project      config.Project
+	AITool       *config.AITool
+	AppConfig    config.Config
+	Prompt       string
+	UpdateStatus func(status string)
+}
+
+// AssessResult represents the result of assessing a single project.
+type AssessResult struct {
+	Project config.Project
+	Success bool
+	Error   error
+	Finding string
+}
+
+func assessProject(job AssessJob) AssessResult {
+	ctx := job.Ctx
+	project := job.Project
+	targetPath := fmt.Sprintf("%s/%s", reposDir, project.Repo)
+
+	cleanup := func() {
+		filesystem.DeleteDirectory(targetPath)
+	}
+
+	if ctx.Err() != nil {
+		return AssessResult{Project: project, Error: errCancelled}
+	}
+
+	// Clone
+	job.UpdateStatus("Cloning...")
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+		repoURL := fmt.Sprintf("git@github.com:%s/%s.git", job.AppConfig.GitHub.Organization, project.Repo)
+		cmd := exec.CommandContext(ctx, "git", "clone", repoURL, targetPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			cleanup()
+			if ctx.Err() != nil {
+				return AssessResult{Project: project, Error: errCancelled}
+			}
+			return AssessResult{Project: project, Error: fmt.Errorf("clone failed: %v (%s)", err, string(output))}
+		}
+	}
+
+	if ctx.Err() != nil {
+		cleanup()
+		return AssessResult{Project: project, Error: errCancelled}
+	}
+
+	// Assess
+	job.UpdateStatus("Running assessment...")
+	finding, err := ai.Assess(ctx, job.AITool, job.Prompt, targetPath, project.Repo)
+	if err != nil {
+		cleanup()
+		if ctx.Err() != nil {
+			return AssessResult{Project: project, Error: errCancelled}
+		}
+		return AssessResult{Project: project, Error: fmt.Errorf("assessment failed: %v", err)}
+	}
+
+	// Cleanup
+	job.UpdateStatus("Cleaning up...")
+	cleanup()
+
+	return AssessResult{Project: project, Success: true, Finding: strings.TrimSpace(finding)}
+}
+
+func assessReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
+	filesystem.CreateWorkspace()
+
+	// Rewrite prompt for per-project use
+	sender.PostStatus("Rewriting question for per-project assessment...")
+	rewrittenPrompt, err := ai.RewritePromptForProject(context.Background(), setup.AITool, setup.Prompt)
+	if err != nil {
+		sender.PostStatus(fmt.Sprintf("⚠️ Failed to rewrite prompt, using original: %v", err))
+		rewrittenPrompt = setup.Prompt
+	} else {
+		sender.PostStatus(fmt.Sprintf("✓ Rewritten question: %s", rewrittenPrompt))
+	}
+
+	checkpoint := parallelism
+	if checkpoint < 5 {
+		checkpoint = 5
+	}
+
+	var jobs []AssessJob
+	for _, project := range selectedProjects {
+		ctx, cancel := context.WithCancel(context.Background())
+		if sender.CancelRegistry != nil {
+			sender.CancelRegistry.Register(project.Repo, cancel)
+		} else {
+			cancel()
+			ctx = context.Background()
+		}
+		jobs = append(jobs, AssessJob{
+			Ctx:       ctx,
+			Project:   project,
+			AITool:    setup.AITool,
+			AppConfig: appCfg,
+			Prompt:    rewrittenPrompt,
+		})
+	}
+
+	numWorkers := parallelism
+	if numWorkers > len(jobs) {
+		numWorkers = len(jobs)
+	}
+
+	var mu sync.Mutex
+	findings := make(map[string]string)
+
+	for batchStart := 0; batchStart < len(jobs); batchStart += checkpoint {
+		batchEnd := batchStart + checkpoint
+		if batchEnd > len(jobs) {
+			batchEnd = len(jobs)
+		}
+		batch := jobs[batchStart:batchEnd]
+
+		batchWorkers := numWorkers
+		if batchWorkers > len(batch) {
+			batchWorkers = len(batch)
+		}
+
+		jobCh := make(chan AssessJob, len(batch))
+		var wg sync.WaitGroup
+
+		for w := 0; w < batchWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for job := range jobCh {
+					repo := job.Project.Repo
+					job.UpdateStatus = func(status string) {
+						sender.UpdateStatus(repo, status)
+					}
+					result := assessProject(job)
+
+					var status string
+					if result.Success {
+						mu.Lock()
+						findings[repo] = result.Finding
+						mu.Unlock()
+						status = "Assessed ✅"
+					} else if result.Error == errCancelled {
+						status = "Cancelled ✗"
+					} else {
+						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+					}
+					sender.Done(repo, status, result.Success, false, "", result.Error)
+				}
+			}()
+		}
+
+		for _, job := range batch {
+			jobCh <- job
+		}
+		close(jobCh)
+		wg.Wait()
+
+		if batchEnd < len(jobs) && sender.ResumeCh != nil {
+			<-sender.ResumeCh
+		}
+	}
+
+	// Summarize findings
+	if len(findings) > 0 {
+		sender.PostStatus("Summarizing findings across all projects...")
+		summary, err := ai.SummarizeFindings(context.Background(), setup.AITool, findings)
+		if err != nil {
+			sender.PostStatus(fmt.Sprintf("⚠️ Failed to summarize findings: %v", err))
+			summary = "Summary generation failed."
+		}
+		sender.AssessmentResult(summary, findings)
+	} else {
+		sender.AssessmentResult("No projects were successfully assessed.", findings)
 	}
 }

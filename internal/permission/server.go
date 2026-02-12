@@ -27,13 +27,26 @@ type PermissionServer struct {
 }
 
 type permissionHTTPRequest struct {
-	ToolName string `json:"tool_name"`
-	Command  string `json:"command"`
-	Repo     string `json:"repo"`
+	ToolName  string         `json:"tool_name"`
+	Command   string         `json:"command"`
+	Repo      string         `json:"repo"`
+	Questions []httpQuestion `json:"questions,omitempty"`
+}
+
+type httpQuestion struct {
+	Text    string               `json:"text"`
+	Header  string               `json:"header"`
+	Options []httpQuestionOption `json:"options"`
+}
+
+type httpQuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
 }
 
 type permissionHTTPResponse struct {
-	Approved bool `json:"approved"`
+	Approved bool   `json:"approved"`
+	Answer   string `json:"answer,omitempty"`
 }
 
 // NewPermissionServer creates a new permission server that sends requests to statusCh.
@@ -88,22 +101,41 @@ func (ps *PermissionServer) handlePermission(w http.ResponseWriter, r *http.Requ
 		ps.mu.Unlock()
 	}()
 
-	// Send to TUI
-	ps.statusCh <- PermissionRequestMsg{
-		Request: PermissionRequest{
-			ID:         id,
-			Repo:       req.Repo,
-			ToolName:   req.ToolName,
-			Command:    req.Command,
-			ResponseCh: responseCh,
-		},
+	// Build the permission request
+	permReq := PermissionRequest{
+		ID:         id,
+		Repo:       req.Repo,
+		ToolName:   req.ToolName,
+		Command:    req.Command,
+		ResponseCh: responseCh,
 	}
+
+	// Convert questions if present
+	if len(req.Questions) > 0 {
+		permReq.IsQuestion = true
+		for _, q := range req.Questions {
+			question := Question{
+				Text:   q.Text,
+				Header: q.Header,
+			}
+			for _, o := range q.Options {
+				question.Options = append(question.Options, QuestionOption{
+					Label:       o.Label,
+					Description: o.Description,
+				})
+			}
+			permReq.Questions = append(permReq.Questions, question)
+		}
+	}
+
+	// Send to TUI
+	ps.statusCh <- PermissionRequestMsg{Request: permReq}
 
 	// Wait for user response or timeout
 	select {
 	case resp := <-responseCh:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(permissionHTTPResponse{Approved: resp.Approved})
+		json.NewEncoder(w).Encode(permissionHTTPResponse{Approved: resp.Approved, Answer: resp.Answer})
 	case <-time.After(permissionTimeout):
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(permissionHTTPResponse{Approved: false})

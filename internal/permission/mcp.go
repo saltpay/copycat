@@ -137,30 +137,85 @@ func handleToolCall(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 		return respondError(req.ID, -32602, "invalid arguments")
 	}
 
-	// Extract command from input
-	command := extractCommand(args.Input)
-
-	// POST to the permission server
+	// Build the HTTP request
 	httpReq := permissionHTTPRequest{
 		ToolName: args.ToolName,
-		Command:  command,
 		Repo:     os.Getenv("COPYCAT_REPO_NAME"),
 	}
+
+	// For AskUserQuestion, extract structured question data
+	if args.ToolName == "AskUserQuestion" {
+		httpReq.Questions = extractQuestions(args.Input)
+		httpReq.Command = formatQuestionsForDisplay(httpReq.Questions)
+	} else {
+		httpReq.Command = extractCommand(args.Input)
+	}
+
 	body, _ := json.Marshal(httpReq)
 
 	resp, err := http.Post(baseURL+"/permission", "application/json", bytes.NewReader(body))
 	if err != nil {
-		// On error, deny
-		return respondToolResult(req.ID, false)
+		return respondToolResult(req.ID, false, "")
 	}
 	defer resp.Body.Close()
 
 	var httpResp permissionHTTPResponse
 	if err := json.NewDecoder(resp.Body).Decode(&httpResp); err != nil {
-		return respondToolResult(req.ID, false)
+		return respondToolResult(req.ID, false, "")
 	}
 
-	return respondToolResult(req.ID, httpResp.Approved)
+	// For AskUserQuestion, always deny the tool but include the user's answer
+	// so Claude can proceed with that information
+	if args.ToolName == "AskUserQuestion" && httpResp.Answer != "" {
+		return respondToolResult(req.ID, false, httpResp.Answer)
+	}
+
+	return respondToolResult(req.ID, httpResp.Approved, "")
+}
+
+// extractQuestions parses the AskUserQuestion input into structured question data.
+func extractQuestions(input json.RawMessage) []httpQuestion {
+	var obj struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Header   string `json:"header"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(input, &obj); err != nil {
+		return nil
+	}
+
+	var questions []httpQuestion
+	for _, q := range obj.Questions {
+		hq := httpQuestion{
+			Text:   q.Question,
+			Header: q.Header,
+		}
+		for _, o := range q.Options {
+			hq.Options = append(hq.Options, httpQuestionOption{
+				Label:       o.Label,
+				Description: o.Description,
+			})
+		}
+		questions = append(questions, hq)
+	}
+	return questions
+}
+
+// formatQuestionsForDisplay returns a readable string for the Command field fallback.
+func formatQuestionsForDisplay(questions []httpQuestion) string {
+	if len(questions) == 0 {
+		return "AskUserQuestion (no questions)"
+	}
+	parts := make([]string, 0, len(questions))
+	for _, q := range questions {
+		parts = append(parts, q.Text)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func extractCommand(input json.RawMessage) string {
@@ -198,12 +253,16 @@ func respondError(id json.RawMessage, code int, message string) jsonRPCResponse 
 	}
 }
 
-func respondToolResult(id json.RawMessage, approved bool) jsonRPCResponse {
+func respondToolResult(id json.RawMessage, approved bool, userAnswer string) jsonRPCResponse {
+	text := fmt.Sprintf(`{"approved": %v}`, approved)
+	if userAnswer != "" {
+		text = fmt.Sprintf(`{"approved": false, "user_response": "User answered: %s"}`, userAnswer)
+	}
 	result := map[string]any{
 		"content": []map[string]any{
 			{
 				"type": "text",
-				"text": fmt.Sprintf(`{"approved": %v}`, approved),
+				"text": text,
 			},
 		},
 	}

@@ -31,23 +31,18 @@ const (
 	stepPrompt
 	stepSlackNotify
 	stepSlackToken
-	// Issues path
-	stepIssueTitle
-	stepIssueDescription
 )
 
 // WizardResult holds all values collected by the setup wizard.
 type WizardResult struct {
-	Action           string // "local" or "issues"
-	AITool           *config.AITool
-	BranchStrategy   string
-	BranchName       string
-	PRTitle          string
-	Prompt           string
-	SendSlack        bool
-	SlackToken       string
-	IssueTitle       string
-	IssueDescription string
+	Action         string // "local" or "assessment"
+	AITool         *config.AITool
+	BranchStrategy string
+	BranchName     string
+	PRTitle        string
+	Prompt         string
+	SendSlack      bool
+	SlackToken     string
 }
 
 type wizardModel struct {
@@ -57,7 +52,7 @@ type wizardModel struct {
 	// Action
 	actionOptions []string
 	actionCursor  int
-	action        string // "local" or "issues"
+	action        string // "local" or "assessment"
 
 	// AI Tool
 	aiTools      []config.AITool
@@ -92,14 +87,6 @@ type wizardModel struct {
 	slackToken         string
 	slackDecided       bool // true once user picked yes/no
 
-	// Issue Title
-	issueTitleInput textinput.Model
-	issueTitle      string
-
-	// Issue Description
-	issueDescInput textinput.Model
-	issueDesc      string
-
 	// State
 	termWidth int
 }
@@ -128,21 +115,11 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []conf
 		slackTokenInput.SetValue(envToken)
 	}
 
-	issueTitleInput := textinput.New()
-	issueTitleInput.Placeholder = "Enter the title for the GitHub issue"
-	issueTitleInput.CharLimit = 256
-	issueTitleInput.Width = 60
-
-	issueDescInput := textinput.New()
-	issueDescInput.Placeholder = "Enter the description for the GitHub issue"
-	issueDescInput.CharLimit = 2048
-	issueDescInput.Width = 60
-
 	m := wizardModel{
 		selectedProjects: selectedProjects,
 		actionOptions: []string{
 			"Perform Changes Locally",
-			"Create GitHub Issues (⚠️ Copilot does not sign commits)",
+			"Run Assessment",
 		},
 		currentStep: stepAction,
 		aiTools:     aiToolsConfig.Tools,
@@ -156,8 +133,6 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []conf
 		promptInput:        promptInput,
 		slackNotifyOptions: []string{"Yes", "No"},
 		slackTokenInput:    slackTokenInput,
-		issueTitleInput:    issueTitleInput,
-		issueDescInput:     issueDescInput,
 	}
 
 	if len(aiToolsConfig.Tools) <= 1 {
@@ -209,10 +184,6 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSlackNotifyStep(msg)
 	case stepSlackToken:
 		return m.updateSlackTokenStep(msg)
-	case stepIssueTitle:
-		return m.updateIssueTitleStep(msg)
-	case stepIssueDescription:
-		return m.updateIssueDescStep(msg)
 	}
 
 	return m, nil
@@ -235,18 +206,23 @@ func (m wizardModel) updateActionStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionCursor++
 		}
 	case "enter", " ":
-		if m.actionCursor == 0 {
+		switch m.actionCursor {
+		case 0:
 			m.action = "local"
 			if m.skipAITool {
 				m.currentStep = stepBranchStrategy
 			} else {
 				m.currentStep = stepAITool
 			}
-		} else {
-			m.action = "issues"
-			m.issueTitleInput.Focus()
-			m.currentStep = stepIssueTitle
-			return m, textinput.Blink
+		case 1:
+			m.action = "assessment"
+			if m.skipAITool {
+				m.promptInput.Placeholder = "Enter your assessment question (e.g., Are these projects using circuit breakers?)"
+				m.promptInput.Focus()
+				m.currentStep = stepPrompt
+				return m, textinput.Blink
+			}
+			m.currentStep = stepAITool
 		}
 	}
 	return m, nil
@@ -270,6 +246,12 @@ func (m wizardModel) updateAIToolStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "enter", " ":
 		m.aiTool = &m.aiTools[m.aiToolCursor]
+		if m.action == "assessment" {
+			m.promptInput.Placeholder = "Enter your assessment question (e.g., Are these projects using circuit breakers?)"
+			m.promptInput.Focus()
+			m.currentStep = stepPrompt
+			return m, textinput.Blink
+		}
 		m.currentStep = stepBranchStrategy
 	}
 	return m, nil
@@ -363,6 +345,9 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.prompt = value
 			m.promptInput.Blur()
+			if m.action == "assessment" {
+				return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
+			}
 			m.currentStep = stepSlackNotify
 			return m, nil
 		case tea.KeyEsc:
@@ -427,49 +412,6 @@ func (m wizardModel) updateSlackTokenStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m wizardModel) updateIssueTitleStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
-	if ok {
-		switch keyMsg.Type {
-		case tea.KeyEnter:
-			value := strings.TrimSpace(m.issueTitleInput.Value())
-			if value == "" {
-				return m, nil
-			}
-			m.issueTitle = value
-			m.issueTitleInput.Blur()
-			m.issueDescInput.Focus()
-			m.currentStep = stepIssueDescription
-			return m, textinput.Blink
-		case tea.KeyEsc:
-			return m, tea.Quit
-		}
-	}
-	var cmd tea.Cmd
-	m.issueTitleInput, cmd = m.issueTitleInput.Update(msg)
-	return m, cmd
-}
-
-func (m wizardModel) updateIssueDescStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
-	if ok {
-		switch keyMsg.Type {
-		case tea.KeyEnter:
-			value := strings.TrimSpace(m.issueDescInput.Value())
-			if value == "" {
-				return m, nil
-			}
-			m.issueDesc = value
-			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-		case tea.KeyEsc:
-			return m, tea.Quit
-		}
-	}
-	var cmd tea.Cmd
-	m.issueDescInput, cmd = m.issueDescInput.Update(msg)
-	return m, cmd
-}
-
 // View renders the wizard.
 func (m wizardModel) View() string {
 	var b strings.Builder
@@ -488,9 +430,12 @@ func (m wizardModel) View() string {
 
 	// Action
 	if m.action != "" {
-		label := "Perform Changes Locally"
-		if m.action == "issues" {
-			label = "Create GitHub Issues"
+		var label string
+		switch m.action {
+		case "local":
+			label = "Perform Changes Locally"
+		case "assessment":
+			label = "Run Assessment"
 		}
 		b.WriteString(completedStyle.Render(fmt.Sprintf("  ✓ Action: %s", label)))
 		b.WriteString("\n")
@@ -512,10 +457,11 @@ func (m wizardModel) View() string {
 	}
 
 	// Render path-specific fields
-	if m.action == "local" {
+	switch m.action {
+	case "local":
 		m.viewLocalFields(&b, completedStyle, labelStyle, pendingStyle, cursorStyle, hintStyle)
-	} else {
-		m.viewIssueFields(&b, completedStyle, labelStyle, pendingStyle)
+	case "assessment":
+		m.viewAssessmentFields(&b, completedStyle, labelStyle, pendingStyle, cursorStyle)
 	}
 
 	// Help text
@@ -523,7 +469,7 @@ func (m wizardModel) View() string {
 	switch m.currentStep {
 	case stepAITool, stepBranchStrategy, stepSlackNotify:
 		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
-	case stepBranchName, stepPRTitle, stepSlackToken, stepIssueTitle, stepIssueDescription:
+	case stepBranchName, stepPRTitle, stepSlackToken:
 		b.WriteString(helpStyle.Render("  enter: submit • esc/ctrl+c: quit"))
 	case stepPrompt:
 		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc/ctrl+c: quit"))
@@ -668,32 +614,45 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 	}
 }
 
-func (m wizardModel) viewIssueFields(b *strings.Builder, completed, label, pending lipgloss.Style) {
-	// Issue Title
-	if m.issueTitle != "" {
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Issue Title: %s", m.issueTitle)))
-		b.WriteString("\n")
-	} else if m.currentStep == stepIssueTitle {
-		b.WriteString(label.Render("  Issue Title"))
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("    %s", m.issueTitleInput.View()))
-		b.WriteString("\n")
-	} else {
-		b.WriteString(pending.Render("  ○ Issue Title"))
-		b.WriteString("\n")
+func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, pending, cursor lipgloss.Style) {
+	// AI Tool
+	if !m.skipAITool {
+		if m.aiTool != nil {
+			b.WriteString(completed.Render(fmt.Sprintf("  ✓ AI Tool: %s (%s)", m.aiTool.Name, m.aiTool.Command)))
+			b.WriteString("\n")
+		} else if m.currentStep == stepAITool {
+			b.WriteString(label.Render("  AI Tool"))
+			b.WriteString("\n")
+			for i, tool := range m.aiTools {
+				text := fmt.Sprintf("%s (%s)", tool.Name, tool.Command)
+				if i == m.aiToolCursor {
+					b.WriteString(cursor.Render(fmt.Sprintf("    > %s", text)))
+				} else {
+					b.WriteString(fmt.Sprintf("      %s", text))
+				}
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString(pending.Render("  ○ AI Tool"))
+			b.WriteString("\n")
+		}
 	}
 
-	// Issue Description
-	if m.issueDesc != "" {
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Issue Description: %s", m.issueDesc)))
+	// Prompt
+	if m.prompt != "" {
+		display := m.prompt
+		if len(display) > 60 {
+			display = display[:57] + "..."
+		}
+		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Question: %s", display)))
 		b.WriteString("\n")
-	} else if m.currentStep == stepIssueDescription {
-		b.WriteString(label.Render("  Issue Description"))
+	} else if m.currentStep == stepPrompt {
+		b.WriteString(label.Render("  Assessment Question"))
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("    %s", m.issueDescInput.View()))
+		b.WriteString(fmt.Sprintf("    %s", m.promptInput.View()))
 		b.WriteString("\n")
 	} else {
-		b.WriteString(pending.Render("  ○ Issue Description"))
+		b.WriteString(pending.Render("  ○ Assessment Question"))
 		b.WriteString("\n")
 	}
 }
@@ -714,15 +673,13 @@ func formatProjectsSummary(projects []config.Project) string {
 
 func (m wizardModel) buildResult() WizardResult {
 	return WizardResult{
-		Action:           m.action,
-		AITool:           m.aiTool,
-		BranchStrategy:   m.branchStrategy,
-		BranchName:       m.branchName,
-		PRTitle:          m.prTitle,
-		Prompt:           m.prompt,
-		SendSlack:        m.sendSlack,
-		SlackToken:       m.slackToken,
-		IssueTitle:       m.issueTitle,
-		IssueDescription: m.issueDesc,
+		Action:         m.action,
+		AITool:         m.aiTool,
+		BranchStrategy: m.branchStrategy,
+		BranchName:     m.branchName,
+		PRTitle:        m.prTitle,
+		Prompt:         m.prompt,
+		SendSlack:      m.sendSlack,
+		SlackToken:     m.slackToken,
 	}
 }
