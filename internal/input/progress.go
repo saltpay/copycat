@@ -66,6 +66,12 @@ type PostStatusMsg struct {
 	Line string
 }
 
+// AssessmentResultMsg carries the final assessment summary and per-project findings.
+type AssessmentResultMsg struct {
+	Summary  string
+	Findings map[string]string
+}
+
 // StatusSender sends status updates to the progress dashboard.
 type StatusSender struct {
 	send           func(tea.Msg)
@@ -94,6 +100,11 @@ func (s *StatusSender) Done(repo, status string, success, skipped bool, prURL st
 // PostStatus sends a post-processing status line to the progress view.
 func (s *StatusSender) PostStatus(line string) {
 	s.send(PostStatusMsg{Line: line})
+}
+
+// AssessmentResult sends the final assessment summary and per-project findings.
+func (s *StatusSender) AssessmentResult(summary string, findings map[string]string) {
+	s.send(AssessmentResultMsg{Summary: summary, Findings: findings})
 }
 
 // Finish signals that all processing (including post-processing) is done.
@@ -134,11 +145,19 @@ type progressModel struct {
 	currentPermission *permission.PermissionRequest
 	permissionChoice  int // 0=approve, 1=deny, 2=approve-all
 	approvedPatterns  map[string]bool
+
+	// Question prompting (AskUserQuestion)
+	questionOptionIdx int // currently highlighted option index
+
+	// Context from wizard (displayed as header)
+	branchName string
+	prTitle    string
+	prompt     string
 }
 
 // NewProgressModel creates a new progress model for tracking repository processing.
 // checkpointInterval controls how often the user is asked to confirm (0 = no checkpoints).
-func NewProgressModel(repos []string, checkpointInterval int) progressModel {
+func NewProgressModel(repos []string, checkpointInterval int, branchName, prTitle, prompt string) progressModel {
 	statuses := make(map[string]string)
 	for _, repo := range repos {
 		statuses[repo] = "Waiting..."
@@ -158,6 +177,9 @@ func NewProgressModel(repos []string, checkpointInterval int) progressModel {
 		cursorRepo:         cursorRepo,
 		cancelled:          make(map[string]bool),
 		approvedPatterns:   make(map[string]bool),
+		branchName:         branchName,
+		prTitle:            prTitle,
+		prompt:             prompt,
 	}
 }
 
@@ -270,17 +292,23 @@ func (m *progressModel) moveCursor(delta int) {
 }
 
 func (m progressModel) handlePermissionRequest(req permission.PermissionRequest) (tea.Model, tea.Cmd) {
-	// Check if this matches an auto-approved pattern
-	pattern := extractPattern(req.Command)
-	if m.approvedPatterns[pattern] {
-		req.ResponseCh <- permission.PermissionResponse{Approved: true}
-		return m, nil
+	// Questions skip auto-approve patterns
+	if !req.IsQuestion {
+		pattern := extractPattern(req.Command)
+		if m.approvedPatterns[pattern] {
+			req.ResponseCh <- permission.PermissionResponse{Approved: true}
+			return m, nil
+		}
 	}
 
 	// Enqueue or show immediately
 	if m.currentPermission == nil {
 		m.currentPermission = &req
-		m.permissionChoice = 0
+		if req.IsQuestion {
+			m.questionOptionIdx = 0
+		} else {
+			m.permissionChoice = 0
+		}
 	} else {
 		m.permissionQueue = append(m.permissionQueue, req)
 	}
@@ -288,6 +316,10 @@ func (m progressModel) handlePermissionRequest(req permission.PermissionRequest)
 }
 
 func (m progressModel) handlePermissionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.currentPermission.IsQuestion {
+		return m.handleQuestionKey(msg)
+	}
+
 	switch msg.String() {
 	case "y":
 		m.currentPermission.ResponseCh <- permission.PermissionResponse{Approved: true}
@@ -329,21 +361,80 @@ func (m progressModel) handlePermissionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
+func (m progressModel) handleQuestionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Collect all options across all questions
+	options := m.collectQuestionOptions()
+	if len(options) == 0 {
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.questionOptionIdx > 0 {
+			m.questionOptionIdx--
+		}
+	case "down", "j":
+		if m.questionOptionIdx < len(options)-1 {
+			m.questionOptionIdx++
+		}
+	case "enter":
+		selected := options[m.questionOptionIdx]
+		m.currentPermission.ResponseCh <- permission.PermissionResponse{
+			Approved: false,
+			Answer:   selected.Label,
+		}
+		return m.advancePermissionQueue(), nil
+	default:
+		// Number keys for quick selection (1-9)
+		key := msg.String()
+		if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+			idx := int(key[0] - '1')
+			if idx < len(options) {
+				selected := options[idx]
+				m.currentPermission.ResponseCh <- permission.PermissionResponse{
+					Approved: false,
+					Answer:   selected.Label,
+				}
+				return m.advancePermissionQueue(), nil
+			}
+		}
+	}
+	return m, nil
+}
+
+// collectQuestionOptions returns a flat list of all options across all questions.
+func (m progressModel) collectQuestionOptions() []permission.QuestionOption {
+	if m.currentPermission == nil {
+		return nil
+	}
+	var options []permission.QuestionOption
+	for _, q := range m.currentPermission.Questions {
+		options = append(options, q.Options...)
+	}
+	return options
+}
+
 func (m progressModel) advancePermissionQueue() progressModel {
 	if len(m.permissionQueue) > 0 {
 		next := m.permissionQueue[0]
 		m.permissionQueue = m.permissionQueue[1:]
 
-		// Check if the next one is auto-approved
-		pattern := extractPattern(next.Command)
-		if m.approvedPatterns[pattern] {
-			next.ResponseCh <- permission.PermissionResponse{Approved: true}
-			m.currentPermission = nil
-			return m.advancePermissionQueue()
+		// Questions skip auto-approve; regular permissions check patterns
+		if !next.IsQuestion {
+			pattern := extractPattern(next.Command)
+			if m.approvedPatterns[pattern] {
+				next.ResponseCh <- permission.PermissionResponse{Approved: true}
+				m.currentPermission = nil
+				return m.advancePermissionQueue()
+			}
 		}
 
 		m.currentPermission = &next
-		m.permissionChoice = 0
+		if next.IsQuestion {
+			m.questionOptionIdx = 0
+		} else {
+			m.permissionChoice = 0
+		}
 	} else {
 		m.currentPermission = nil
 	}
@@ -416,9 +507,45 @@ func (m progressModel) View() string {
 		pct, bar, m.completed, m.total, timeInfo)))
 	b.WriteString("\n\n")
 
-	// Permission prompt (shown between progress bar and project list)
+	// Wizard context (branch, PR title, prompt)
+	dimLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	dimValue := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	if m.branchName != "" || m.prTitle != "" {
+		var parts []string
+		if m.branchName != "" {
+			parts = append(parts, dimLabel.Render("Branch: ")+dimValue.Render(m.branchName))
+		}
+		if m.prTitle != "" {
+			parts = append(parts, dimLabel.Render("PR: ")+dimValue.Render(m.prTitle))
+		}
+		b.WriteString("  " + strings.Join(parts, "    "))
+		b.WriteString("\n")
+	}
+	if m.prompt != "" {
+		maxLen := m.termWidth - 12
+		if maxLen < 40 {
+			maxLen = 40
+		}
+		p := m.prompt
+		// Replace newlines with spaces for compact single-line display
+		p = strings.ReplaceAll(p, "\n", " ")
+		if len(p) > maxLen {
+			p = p[:maxLen-3] + "..."
+		}
+		b.WriteString("  " + dimLabel.Render("Prompt: ") + dimValue.Render(p))
+		b.WriteString("\n")
+	}
+	if m.branchName != "" || m.prTitle != "" || m.prompt != "" {
+		b.WriteString("\n")
+	}
+
+	// Permission prompt or question prompt (shown between progress bar and project list)
 	if m.currentPermission != nil {
-		b.WriteString(m.renderPermissionPrompt())
+		if m.currentPermission.IsQuestion {
+			b.WriteString(m.renderQuestionPrompt())
+		} else {
+			b.WriteString(m.renderPermissionPrompt())
+		}
 		b.WriteString("\n")
 	}
 
@@ -537,6 +664,61 @@ func (m progressModel) renderPermissionPrompt() string {
 
 	if len(m.permissionQueue) > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("\n  [%d more pending]", len(m.permissionQueue))))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (m progressModel) renderQuestionPrompt() string {
+	var b strings.Builder
+
+	questionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+
+	repoName := m.currentPermission.Repo
+	if repoName == "" {
+		repoName = "repo"
+	}
+
+	optionIdx := 0
+	for _, q := range m.currentPermission.Questions {
+		b.WriteString(questionStyle.Render(fmt.Sprintf("❓ [%s]", repoName)))
+		if q.Header != "" {
+			b.WriteString("  ")
+			b.WriteString(headerStyle.Render(q.Header))
+		}
+		b.WriteString("\n")
+		b.WriteString("  ")
+		b.WriteString(q.Text)
+		b.WriteString("\n\n")
+
+		for _, opt := range q.Options {
+			num := fmt.Sprintf("%d", optionIdx+1)
+			label := fmt.Sprintf("  %s. %s", num, opt.Label)
+			if opt.Description != "" {
+				label += " — " + opt.Description
+			}
+
+			if optionIdx == m.questionOptionIdx {
+				b.WriteString(selectedStyle.Render("▸ " + label))
+			} else {
+				b.WriteString(normalStyle.Render("  " + label))
+			}
+			b.WriteString("\n")
+			optionIdx++
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("  ↑↓: navigate  enter: select  1-9: quick select"))
+	b.WriteString("\n")
+
+	if len(m.permissionQueue) > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  [%d more pending]", len(m.permissionQueue))))
 		b.WriteString("\n")
 	}
 
