@@ -38,6 +38,9 @@ type projectSelectorModel struct {
 	filteredProjects []config.Project
 	// Track if user has manually modified selection in filter mode
 	manualSelection bool
+	// Slack room warning after refresh
+	showSlackWarning  bool
+	missingSlackCount int
 }
 
 func initialModel(projects []config.Project) projectSelectorModel {
@@ -66,6 +69,19 @@ func (m projectSelectorModel) Init() tea.Cmd {
 func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle slack warning dismissal
+		if m.showSlackWarning {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				m.quitted = true
+				return m, tea.Quit
+			case "enter", " ":
+				m.showSlackWarning = false
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// Handle filter mode
 		if m.filterMode {
 			switch msg.String() {
@@ -449,6 +465,17 @@ func (m projectSelectorModel) View() string {
 	if m.refreshing {
 		style := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
 		return style.Render("  Refreshing project list...")
+	}
+
+	if m.showSlackWarning {
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+		return fmt.Sprintf(
+			"%s\n\n%s\n\n%s",
+			warnStyle.Render(fmt.Sprintf("⚠ %d project(s) have no slack_room configured", m.missingSlackCount)),
+			dimStyle.Render("Slack notifications will be skipped for these projects.\nRun 'copycat edit projects' to configure slack_room."),
+			dimStyle.Render("Press enter to continue"),
+		)
 	}
 
 	var b strings.Builder

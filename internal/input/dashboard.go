@@ -170,6 +170,12 @@ func (m dashboardModel) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-create projects model with fresh data, preserving nothing
 		m.cfg.Projects = msg.Projects
 		m.projects = initialModel(msg.Projects)
+		// Show warning if any projects are missing slack rooms
+		missing := m.projects.countMissingSlackRooms()
+		if missing > 0 {
+			m.projects.showSlackWarning = true
+			m.projects.missingSlackCount = missing
+		}
 		return m, m.projects.Init()
 	}
 
