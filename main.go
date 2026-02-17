@@ -50,11 +50,12 @@ type ProcessJob struct {
 
 // ProcessResult represents the result of processing a single project
 type ProcessResult struct {
-	Project config.Project
-	Success bool
-	Skipped bool
-	Error   error
-	PRURL   string
+	Project  config.Project
+	Success  bool
+	Skipped  bool
+	Error    error
+	PRURL    string
+	AIOutput string
 }
 
 func main() {
@@ -357,7 +358,7 @@ func processProject(job ProcessJob) ProcessResult {
 		if ctx.Err() != nil {
 			return ProcessResult{Project: project, Success: false, Error: errCancelled}
 		}
-		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v", err)}
+		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v", err), AIOutput: aiOutput}
 	}
 
 	if ctx.Err() != nil {
@@ -393,7 +394,7 @@ func processProject(job ProcessJob) ProcessResult {
 	}
 	if len(output) == 0 {
 		cleanup()
-		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected")}
+		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected"), AIOutput: aiOutput}
 	}
 
 	if ctx.Err() != nil {
@@ -434,7 +435,7 @@ func processProject(job ProcessJob) ProcessResult {
 	job.UpdateStatus("Cleaning up...")
 	cleanup()
 
-	return ProcessResult{Project: project, Success: true, Error: nil, PRURL: prURL}
+	return ProcessResult{Project: project, Success: true, Error: nil, PRURL: prURL, AIOutput: aiOutput}
 }
 
 func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int, allProjects []config.Project) {
@@ -509,7 +510,7 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 					var status string
 					switch {
 					case result.Success:
-						status = fmt.Sprintf("Completed ✅ PR: %s", result.PRURL)
+						status = fmt.Sprintf("Completed ✅ PR: \033]8;;%s\033\\%s\033]8;;\033\\", result.PRURL, result.PRURL)
 					case result.Skipped:
 						status = fmt.Sprintf("Skipped ⊘ %v", result.Error)
 					case result.Error == errCancelled:
@@ -517,7 +518,7 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 					default:
 						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
 					}
-					sender.Done(repo, status, result.Success, result.Skipped, result.PRURL, result.Error)
+					sender.Done(repo, status, result.Success, result.Skipped, result.PRURL, result.Error, result.AIOutput)
 				}
 			}()
 		}
@@ -710,7 +711,7 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 					} else {
 						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
 					}
-					sender.Done(repo, status, result.Success, false, "", result.Error)
+					sender.Done(repo, status, result.Success, false, "", result.Error, "")
 				}
 			}()
 		}
