@@ -53,12 +53,13 @@ type ProjectStatusMsg struct {
 
 // ProjectDoneMsg signals that a project has finished processing.
 type ProjectDoneMsg struct {
-	Repo    string
-	Status  string
-	Success bool
-	Skipped bool
-	PRURL   string
-	Error   error
+	Repo     string
+	Status   string
+	Success  bool
+	Skipped  bool
+	PRURL    string
+	Error    error
+	AIOutput string
 }
 
 // PostStatusMsg carries a post-processing status line (e.g. Slack notifications).
@@ -86,14 +87,15 @@ func (s *StatusSender) UpdateStatus(repo, status string) {
 }
 
 // Done signals that a project has finished processing.
-func (s *StatusSender) Done(repo, status string, success, skipped bool, prURL string, err error) {
+func (s *StatusSender) Done(repo, status string, success, skipped bool, prURL string, err error, aiOutput string) {
 	s.send(ProjectDoneMsg{
-		Repo:    repo,
-		Status:  status,
-		Success: success,
-		Skipped: skipped,
-		PRURL:   prURL,
-		Error:   err,
+		Repo:     repo,
+		Status:   status,
+		Success:  success,
+		Skipped:  skipped,
+		PRURL:    prURL,
+		Error:    err,
+		AIOutput: aiOutput,
 	})
 }
 
@@ -150,9 +152,11 @@ type progressModel struct {
 	questionOptionIdx int // currently highlighted option index
 
 	// Context from wizard (displayed as header)
-	branchName string
-	prTitle    string
-	prompt     string
+	branchName     string
+	prTitle        string
+	prompt         string
+	promptExpanded bool
+	cursorOnPrompt bool
 }
 
 // NewProgressModel creates a new progress model for tracking repository processing.
@@ -229,11 +233,18 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.quitted = true
 			return m, tea.Quit
+		case "enter":
+			if m.cursorOnPrompt && m.prompt != "" {
+				m.promptExpanded = !m.promptExpanded
+			}
 		case "up", "k":
 			m.moveCursor(-1)
 		case "down", "j":
 			m.moveCursor(1)
 		case "x":
+			if m.cursorOnPrompt {
+				break
+			}
 			if m.cursorRepo != "" && !m.isCancellable(m.cursorRepo) {
 				break
 			}
@@ -257,8 +268,23 @@ func (m progressModel) isCancellable(repo string) bool {
 }
 
 // moveCursor moves the cursor up or down by delta positions in the sorted list.
+// The prompt line sits above the repo list; moving up from the first repo lands there.
 func (m *progressModel) moveCursor(delta int) {
+	hasPrompt := m.prompt != ""
 	sorted := m.sortedRepos()
+
+	// Currently on the prompt line
+	if m.cursorOnPrompt {
+		if delta > 0 && len(sorted) > 0 {
+			// Move down into the repo list
+			m.cursorOnPrompt = false
+			m.cursorRepo = sorted[0]
+			m.manualScroll = true
+			m.scrollOffset = 0
+		}
+		return
+	}
+
 	if len(sorted) == 0 {
 		return
 	}
@@ -274,6 +300,12 @@ func (m *progressModel) moveCursor(delta int) {
 
 	newIdx := curIdx + delta
 	if newIdx < 0 {
+		if hasPrompt {
+			// Move up past the first repo → land on prompt line
+			m.cursorOnPrompt = true
+			m.cursorRepo = ""
+			return
+		}
 		newIdx = 0
 	}
 	if newIdx >= len(sorted) {
@@ -522,18 +554,48 @@ func (m progressModel) View() string {
 		b.WriteString("\n")
 	}
 	if m.prompt != "" {
-		maxLen := m.termWidth - 12
-		if maxLen < 40 {
-			maxLen = 40
+		promptCursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		promptPrefix := "  "
+		if m.cursorOnPrompt {
+			promptPrefix = promptCursorStyle.Render("▸") + " "
 		}
-		p := m.prompt
-		// Replace newlines with spaces for compact single-line display
-		p = strings.ReplaceAll(p, "\n", " ")
-		if len(p) > maxLen {
-			p = p[:maxLen-3] + "..."
+
+		if m.promptExpanded {
+			// Expanded: show full prompt in a bordered box
+			btnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
+			b.WriteString(promptPrefix + dimLabel.Render("Prompt ") + btnStyle.Render("[▼ collapse]"))
+			b.WriteString("\n")
+
+			boxWidth := m.termWidth - 10
+			if boxWidth < 40 {
+				boxWidth = 40
+			}
+			boxStyle := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("238")).
+				Padding(0, 1).
+				Width(boxWidth)
+			promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+			rendered := boxStyle.Render(promptStyle.Render(m.prompt))
+			for _, line := range strings.Split(rendered, "\n") {
+				b.WriteString("    " + line + "\n")
+			}
+		} else {
+			// Collapsed: single line with expand hint
+			maxLen := m.termWidth - 22
+			if maxLen < 30 {
+				maxLen = 30
+			}
+			p := m.prompt
+			p = strings.ReplaceAll(p, "\n", " ")
+			if len(p) > maxLen {
+				p = p[:maxLen-3] + "..."
+			}
+			btnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+			btn := btnStyle.Render(" [▶ expand]")
+			b.WriteString(promptPrefix + dimLabel.Render("Prompt: ") + dimValue.Render(p) + btn)
+			b.WriteString("\n")
 		}
-		b.WriteString("  " + dimLabel.Render("Prompt: ") + dimValue.Render(p))
-		b.WriteString("\n")
 	}
 	if m.branchName != "" || m.prTitle != "" || m.prompt != "" {
 		b.WriteString("\n")
@@ -573,12 +635,12 @@ func (m progressModel) View() string {
 	}
 
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
 	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
 	for _, repo := range sorted[start:end] {
 		status := m.statuses[repo]
-		isCursor := repo == m.cursorRepo
+		isCursor := !m.cursorOnPrompt && repo == m.cursorRepo
 
 		prefix := "  "
 		if isCursor {
@@ -611,7 +673,13 @@ func (m progressModel) View() string {
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	var hints []string
 	hints = append(hints, helpStyle.Render("↑↓: navigate"))
-	if m.cursorRepo != "" && m.isCancellable(m.cursorRepo) {
+	if m.cursorOnPrompt {
+		if m.promptExpanded {
+			hints = append(hints, helpStyle.Render("enter: collapse"))
+		} else {
+			hints = append(hints, helpStyle.Render("enter: expand"))
+		}
+	} else if m.cursorRepo != "" && m.isCancellable(m.cursorRepo) {
 		cancelHintStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 		hints = append(hints, cancelHintStyle.Render("x: cancel"))
 	}
@@ -626,7 +694,7 @@ func (m progressModel) renderPermissionPrompt() string {
 	var b strings.Builder
 
 	lockStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	cmdStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	cmdStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("40"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
 	repoName := m.currentPermission.Repo
@@ -674,7 +742,7 @@ func (m progressModel) renderQuestionPrompt() string {
 	var b strings.Builder
 
 	questionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("40"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))

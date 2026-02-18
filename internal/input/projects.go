@@ -596,7 +596,7 @@ func (m projectSelectorModel) View() string {
 
 	// Selected count
 	countStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86")).
+		Foreground(lipgloss.Color("40")).
 		Bold(true)
 
 	selectedCount := len(m.selected)

@@ -23,6 +23,8 @@ const (
 	phaseDone
 )
 
+const maxLogLines = 10
+
 // projectsFetchedMsg carries the result of an async project refresh.
 type projectsFetchedMsg struct {
 	Projects []config.Project
@@ -88,8 +90,11 @@ type dashboardModel struct {
 	assessmentSummary  string
 	assessmentFindings map[string]string
 
-	// Done screen scrolling
+	// Done screen navigation
 	doneScrollOffset int
+	doneCursorRepo   string
+	expandedLogRepo  string
+	logScrollOffset  int
 }
 
 func newDashboardModel(cfg DashboardConfig) dashboardModel {
@@ -123,6 +128,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.interrupted = true
 				m = m.cleanupPermissionServer()
 				m.phase = phaseDone
+				m = m.initDoneScreen()
 				return m, nil
 			}
 			return m, tea.Quit
@@ -322,6 +328,7 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.processResults = m.progress.results
 		m = m.cleanupPermissionServer()
 		m.phase = phaseDone
+		m = m.initDoneScreen()
 		return m, nil
 	case resumeProcessingMsg:
 		if m.resumeCh != nil {
@@ -372,10 +379,57 @@ func (m dashboardModel) cleanupPermissionServer() dashboardModel {
 }
 
 func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Assessment done screen uses simple scroll (no cursor/logs)
+	if m.wizardResult != nil && m.wizardResult.Action == "assessment" {
+		return m.updateDoneAssessment(msg)
+	}
+
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// When a log is expanded, handle inner navigation
+		if m.expandedLogRepo != "" {
+			switch keyMsg.String() {
+			case "q":
+				return m, tea.Quit
+			case "enter", "l", "esc":
+				m.expandedLogRepo = ""
+				m.logScrollOffset = 0
+				return m, nil
+			case "up", "k":
+				if m.logScrollOffset > 0 {
+					m.logScrollOffset--
+				}
+				return m, nil
+			case "down", "j":
+				results := m.doneResults()
+				if result, ok := results[m.expandedLogRepo]; ok {
+					lines := aiOutputLines(result.AIOutput)
+					maxScroll := len(lines) - maxLogLines
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					if m.logScrollOffset < maxScroll {
+						m.logScrollOffset++
+					}
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Normal done screen navigation
 		switch keyMsg.String() {
-		case "q", "enter":
+		case "q":
 			return m, tea.Quit
+		case "enter", "l":
+			// Toggle log expansion for cursor repo
+			if m.doneCursorRepo != "" {
+				results := m.doneResults()
+				if result, ok := results[m.doneCursorRepo]; ok && result.AIOutput != "" {
+					m.expandedLogRepo = m.doneCursorRepo
+					m.logScrollOffset = 0
+				}
+			}
+			return m, nil
 		case "r":
 			// Retry only actual failures (not skipped)
 			var retryProjects []config.Project
@@ -388,7 +442,6 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.selectedProjects = retryProjects
-			m.doneScrollOffset = 0
 			return m.startProcessing()
 		case "a":
 			// Retry all non-success (failures + skipped)
@@ -402,14 +455,45 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.selectedProjects = retryProjects
-			m.doneScrollOffset = 0
+			return m.startProcessing()
+		case "up", "k":
+			m = m.moveDoneCursor(-1)
+		case "down", "j":
+			m = m.moveDoneCursor(1)
+		}
+	}
+	return m, nil
+}
+
+// updateDoneAssessment handles key input for the assessment done screen (simple scroll).
+func (m dashboardModel) updateDoneAssessment(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "q", "enter":
+			return m, tea.Quit
+		case "r":
+			var retryProjects []config.Project
+			for _, p := range m.selectedProjects {
+				if result, ok := m.processResults[p.Repo]; ok && !result.Success {
+					retryProjects = append(retryProjects, p)
+				}
+			}
+			if len(retryProjects) == 0 {
+				return m, nil
+			}
+			m.selectedProjects = retryProjects
 			return m.startProcessing()
 		case "up", "k":
 			if m.doneScrollOffset > 0 {
 				m.doneScrollOffset--
 			}
 		case "down", "j":
-			maxScroll := m.doneMaxScroll()
+			contentLines := m.assessmentContentLines()
+			maxVisible := m.doneMaxVisible()
+			maxScroll := len(contentLines) - maxVisible
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
 			if m.doneScrollOffset < maxScroll {
 				m.doneScrollOffset++
 			}
@@ -418,36 +502,104 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// doneMaxScroll returns the maximum scroll offset for the done screen.
-func (m dashboardModel) doneMaxScroll() int {
-	total := m.doneContentLineCount()
-	maxVisible := m.doneMaxVisible()
-	if total <= maxVisible {
-		return 0
+func (m dashboardModel) initDoneScreen() dashboardModel {
+	m.doneScrollOffset = 0
+	m.expandedLogRepo = ""
+	m.logScrollOffset = 0
+	repos := m.doneVisibleRepos()
+	if len(repos) > 0 {
+		m.doneCursorRepo = repos[0]
 	}
-	return total - maxVisible
+	return m
 }
 
-// doneContentLineCount returns the number of scrollable content lines for the done screen.
-func (m dashboardModel) doneContentLineCount() int {
-	if m.wizardResult != nil && m.wizardResult.Action == "assessment" {
-		return len(m.assessmentContentLines())
-	}
+// doneResults returns the process results, falling back to progress results.
+func (m dashboardModel) doneResults() map[string]ProjectDoneMsg {
 	results := m.processResults
 	if results == nil {
 		results = m.progress.results
 	}
-	count := 0
-	for _, repo := range m.progress.repos {
-		if _, ok := results[repo]; ok {
-			count++
-		}
-	}
-	return count
+	return results
 }
 
-// doneMaxVisible returns how many result rows fit on screen.
+// doneVisibleRepos returns the list of repos that have results.
+func (m dashboardModel) doneVisibleRepos() []string {
+	results := m.doneResults()
+	var repos []string
+	for _, repo := range m.progress.repos {
+		if _, ok := results[repo]; ok {
+			repos = append(repos, repo)
+		}
+	}
+	return repos
+}
+
+// moveDoneCursor moves the cursor up or down in the done screen.
+func (m dashboardModel) moveDoneCursor(delta int) dashboardModel {
+	repos := m.doneVisibleRepos()
+	if len(repos) == 0 {
+		return m
+	}
+	curIdx := 0
+	for i, repo := range repos {
+		if repo == m.doneCursorRepo {
+			curIdx = i
+			break
+		}
+	}
+	newIdx := curIdx + delta
+	if newIdx < 0 {
+		newIdx = 0
+	}
+	if newIdx >= len(repos) {
+		newIdx = len(repos) - 1
+	}
+	m.doneCursorRepo = repos[newIdx]
+
+	// Auto-scroll to keep cursor visible
+	maxVisible := m.doneMaxVisibleRepos()
+	if newIdx < m.doneScrollOffset {
+		m.doneScrollOffset = newIdx
+	} else if newIdx >= m.doneScrollOffset+maxVisible {
+		m.doneScrollOffset = newIdx - maxVisible + 1
+	}
+	return m
+}
+
+// doneMaxVisibleRepos returns how many repo rows fit on screen.
 // Reserves space for: banner(3) + border(2) + header(3) + summary(2) + postLines + help(2) + padding(2).
+func (m dashboardModel) doneMaxVisibleRepos() int {
+	overhead := 14 + len(m.progress.postLines)
+	// Account for expanded log box (content lines + 2 for box border)
+	if m.expandedLogRepo != "" {
+		results := m.doneResults()
+		if result, ok := results[m.expandedLogRepo]; ok {
+			lines := aiOutputLines(result.AIOutput)
+			logHeight := len(lines)
+			if logHeight > maxLogLines {
+				logHeight = maxLogLines
+			}
+			// Add scroll indicator lines
+			if len(lines) > maxLogLines {
+				if m.logScrollOffset > 0 {
+					logHeight++
+				}
+				if m.logScrollOffset+maxLogLines < len(lines) {
+					logHeight++
+				}
+			}
+			logHeight += 2 // box border top + bottom
+			overhead += logHeight
+		}
+	}
+	available := m.termHeight - overhead
+	if available < 3 {
+		available = 3
+	}
+	return available
+}
+
+// doneMaxVisible returns the max visible lines for the assessment done screen (line-based scroll).
 func (m dashboardModel) doneMaxVisible() int {
 	overhead := 14 + len(m.progress.postLines)
 	available := m.termHeight - overhead
@@ -498,11 +650,15 @@ func (m dashboardModel) renderDoneSummary() string {
 	var b strings.Builder
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
-	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
 	skipStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	logBtnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	logBtnActiveStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
+	logLineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 
 	if m.interrupted {
 		b.WriteString(titleStyle.Render("Processing interrupted"))
@@ -512,11 +668,7 @@ func (m dashboardModel) renderDoneSummary() string {
 		b.WriteString("\n\n")
 	}
 
-	results := m.processResults
-	if results == nil {
-		results = m.progress.results
-	}
-
+	results := m.doneResults()
 	cancelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 
 	succeeded := 0
@@ -549,16 +701,10 @@ func (m dashboardModel) renderDoneSummary() string {
 	}
 	b.WriteString("\n\n")
 
-	// Build the list of repos that have results
-	var visibleRepos []string
-	for _, repo := range m.progress.repos {
-		if _, ok := results[repo]; ok {
-			visibleRepos = append(visibleRepos, repo)
-		}
-	}
+	visibleRepos := m.doneVisibleRepos()
 
 	// Scrolling
-	maxVisible := m.doneMaxVisible()
+	maxVisible := m.doneMaxVisibleRepos()
 	start := m.doneScrollOffset
 	end := start + maxVisible
 	if end > len(visibleRepos) {
@@ -570,9 +716,73 @@ func (m dashboardModel) renderDoneSummary() string {
 		b.WriteString("\n")
 	}
 
+	logBoxWidth := m.termWidth - 14
+	if logBoxWidth < 40 {
+		logBoxWidth = 40
+	}
+
 	for _, repo := range visibleRepos[start:end] {
 		result := results[repo]
-		b.WriteString(fmt.Sprintf("  %s %s\n", repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
+		isCursor := repo == m.doneCursorRepo
+		isExpanded := repo == m.expandedLogRepo
+
+		// Cursor indicator
+		prefix := "  "
+		if isCursor {
+			prefix = cursorStyle.Render("▸") + " "
+		}
+
+		// Logs button
+		logsBtn := ""
+		if result.AIOutput != "" {
+			if isExpanded {
+				logsBtn = " " + logBtnActiveStyle.Render("[▼ logs]")
+			} else {
+				logsBtn = " " + logBtnStyle.Render("[▶ logs]")
+			}
+		}
+
+		b.WriteString(fmt.Sprintf("%s%s %s%s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status, logsBtn))
+
+		// Expanded log panel
+		if isExpanded {
+			lines := aiOutputLines(result.AIOutput)
+			if len(lines) > 0 {
+				logStart := m.logScrollOffset
+				logEnd := logStart + maxLogLines
+				if logEnd > len(lines) {
+					logEnd = len(lines)
+				}
+
+				// Build log content lines
+				maxContentWidth := logBoxWidth - 4 // account for box padding
+				var contentLines []string
+				if logStart > 0 {
+					contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", logStart)))
+				}
+				for _, line := range lines[logStart:logEnd] {
+					if len(line) > maxContentWidth {
+						line = line[:maxContentWidth-3] + "..."
+					}
+					contentLines = append(contentLines, logLineStyle.Render(line))
+				}
+				if len(lines)-logEnd > 0 {
+					contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(lines)-logEnd)))
+				}
+
+				// Render as a bordered box
+				logBoxStyle := lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("238")).
+					Padding(0, 1).
+					Width(logBoxWidth)
+
+				rendered := logBoxStyle.Render(strings.Join(contentLines, "\n"))
+				for _, boxLine := range strings.Split(rendered, "\n") {
+					b.WriteString("    " + boxLine + "\n")
+				}
+			}
+		}
 	}
 
 	remaining := len(visibleRepos) - end
@@ -595,18 +805,22 @@ func (m dashboardModel) renderDoneSummary() string {
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	retryStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	var hints []string
-	if failed > 0 {
-		hints = append(hints, retryStyle.Render(fmt.Sprintf("r: retry %d failed", failed)))
+	if m.expandedLogRepo != "" {
+		hints = append(hints, helpStyle.Render("↑↓: scroll logs"))
+		hints = append(hints, helpStyle.Render("enter/esc: close"))
+	} else {
+		hints = append(hints, helpStyle.Render("↑↓: navigate"))
+		hints = append(hints, helpStyle.Render("enter/l: view logs"))
+		if failed > 0 {
+			hints = append(hints, retryStyle.Render(fmt.Sprintf("r: retry %d failed", failed)))
+		}
+		if failed > 0 && skipped > 0 {
+			hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry all %d", failed+skipped)))
+		} else if skipped > 0 {
+			hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry %d skipped", skipped)))
+		}
 	}
-	if failed > 0 && skipped > 0 {
-		hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry all %d", failed+skipped)))
-	} else if skipped > 0 {
-		hints = append(hints, retryStyle.Render(fmt.Sprintf("a: retry %d skipped", skipped)))
-	}
-	hints = append(hints, helpStyle.Render("q/enter: exit"))
-	if len(visibleRepos) > maxVisible {
-		hints = append(hints, helpStyle.Render("↑↓/jk: scroll"))
-	}
+	hints = append(hints, helpStyle.Render("q: exit"))
 	b.WriteString("  " + strings.Join(hints, helpStyle.Render("  •  ")))
 	b.WriteString("\n")
 
@@ -659,7 +873,7 @@ func (m dashboardModel) renderAssessmentSummary() string {
 	var b strings.Builder
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
-	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
 	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 
@@ -728,6 +942,22 @@ func (m dashboardModel) renderAssessmentSummary() string {
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// aiOutputLines splits AI output into non-empty lines for display.
+func aiOutputLines(output string) []string {
+	if output == "" {
+		return nil
+	}
+	raw := strings.Split(strings.TrimSpace(output), "\n")
+	var lines []string
+	for _, line := range raw {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	return lines
 }
 
 // RunDashboard is the single entry point that replaces all standalone tea.Program calls.

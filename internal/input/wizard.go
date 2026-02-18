@@ -416,7 +416,7 @@ func (m wizardModel) updateSlackTokenStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m wizardModel) View() string {
 	var b strings.Builder
 
-	completedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
+	completedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
 	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	pendingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
