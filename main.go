@@ -153,6 +153,7 @@ func main() {
 		AssessRepos: func(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult) {
 			assessReposWithSender(sender, selectedProjects, setup, *appConfig, par)
 		},
+		RefinePrompt: ai.RefinePrompt,
 	}
 
 	result, err := input.RunDashboard(dashCfg)

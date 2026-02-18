@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -47,6 +48,7 @@ type DashboardConfig struct {
 	FetchProjects func() ([]config.Project, error)
 	ProcessRepos  func(sender *StatusSender, projects []config.Project, setup *WizardResult)
 	AssessRepos   func(sender *StatusSender, projects []config.Project, setup *WizardResult)
+	RefinePrompt  func(ctx context.Context, aiTool *config.AITool, prompt string, projectNames []string) (string, error)
 }
 
 // DashboardResult holds everything the caller needs after the dashboard exits.
@@ -157,6 +159,7 @@ func (m dashboardModel) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.selectedProjects = msg.Selected
 		m.wizard = newWizardModel(m.cfg.AIToolsConfig, m.selectedProjects)
+		m.wizard.termWidth = m.termWidth
 		m.phase = phaseWizard
 		return m, m.wizard.Init()
 
@@ -206,10 +209,58 @@ func (m dashboardModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.wizard.prompt = msg.Content
 		m.wizard.promptInput.Blur()
-		if m.wizard.action == "assessment" {
-			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.wizard.buildResult()} }
+		if m.wizard.promptAlreadyRefined {
+			if m.wizard.action == "assessment" {
+				return m, func() tea.Msg { return wizardCompletedMsg{Result: m.wizard.buildResult()} }
+			}
+			m.wizard.currentStep = stepSlackNotify
+			return m, nil
 		}
-		m.wizard.currentStep = stepSlackNotify
+		// Ask if user wants AI refinement
+		m.wizard.refineCursor = 0
+		m.wizard.currentStep = stepRefineChoice
+		return m, nil
+
+	case promptRefineRequestedMsg:
+		m.wizard.currentStep = stepPromptReview
+		m.wizard.refining = true
+		m.wizard.tickCount = 0
+		m.wizard.refinedPrompt = ""
+		m.wizard.refineErr = nil
+		m.wizard.reviewCursor = 0
+
+		refineCmd := func() tea.Msg {
+			if m.cfg.RefinePrompt == nil {
+				return promptRefinedMsg{Err: fmt.Errorf("no RefinePrompt function configured")}
+			}
+			var projectNames []string
+			for _, p := range m.selectedProjects {
+				projectNames = append(projectNames, p.Repo)
+			}
+			refined, err := m.cfg.RefinePrompt(context.Background(), m.wizard.aiTool, msg.Prompt, projectNames)
+			return promptRefinedMsg{Refined: refined, Err: err}
+		}
+
+		tickCmd := tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+			return wizardTickMsg{}
+		})
+
+		return m, tea.Batch(refineCmd, tickCmd)
+
+	case promptRefinedMsg:
+		// Delegate to wizard
+		updated, cmd := m.wizard.Update(msg)
+		m.wizard = updated.(wizardModel)
+		return m, cmd
+
+	case wizardTickMsg:
+		if m.wizard.refining {
+			m.wizard.tickCount++
+			tickCmd := tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return wizardTickMsg{}
+			})
+			return m, tickCmd
+		}
 		return m, nil
 	}
 

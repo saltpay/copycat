@@ -82,8 +82,27 @@ func SummarizeFindings(ctx context.Context, aiTool *config.AITool, findings map[
 	return strings.TrimSpace(summary), nil
 }
 
+func RefinePrompt(ctx context.Context, aiTool *config.AITool, prompt string, projectNames []string) (string, error) {
+	systemPrompt := fmt.Sprintf(
+		"Refine the following prompt for clarity and effectiveness. "+
+			"The prompt will be applied across multiple repositories that may differ in language, framework, and structure. "+
+			"Do NOT read or analyze any project files. "+
+			"IMPORTANT: Output ONLY the refined prompt text. No preamble, no explanation, no commentary, no introductory sentences.\n\n"+
+			"Original prompt: %s",
+		prompt,
+	)
+
+	cmd := aiTool.BuildCommandContext(ctx, systemPrompt, pickArgs(aiTool))
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to refine prompt: %v\nOutput: %s", err, string(output))
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 func GeneratePRDescription(ctx context.Context, aiTool *config.AITool, project config.Project, aiOutput string, targetPath string) (string, error) {
-	summaryPrompt := fmt.Sprintf("Given the changes below, produce a 2-3 sentence PR description. Do not include any introductory text, headers, or commentary — respond with the description only.\n\nChanges:\n%s", aiOutput)
+	summaryPrompt := fmt.Sprintf("Given the changes below, produce a 2-3 sentence PR description. Do not include any introductory text, headers, or commentary - respond with the description only.\n\nChanges:\n%s", aiOutput)
 
 	cmd := aiTool.BuildCommandContext(ctx, summaryPrompt, aiTool.SummaryArgs)
 	cmd.Dir = targetPath
