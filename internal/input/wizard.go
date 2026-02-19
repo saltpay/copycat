@@ -19,20 +19,6 @@ type wizardCompletedMsg struct {
 // editorRequestedMsg is emitted when the user presses ctrl+e to open an editor.
 type editorRequestedMsg struct{}
 
-// promptRefineRequestedMsg is emitted when the user submits a prompt and we want to refine it.
-type promptRefineRequestedMsg struct {
-	Prompt string
-}
-
-// promptRefinedMsg carries the result of AI prompt refinement.
-type promptRefinedMsg struct {
-	Refined string
-	Err     error
-}
-
-// wizardTickMsg is used for spinner animation during refinement.
-type wizardTickMsg struct{}
-
 type wizardStep int
 
 const (
@@ -43,8 +29,6 @@ const (
 	stepBranchName
 	stepPRTitle
 	stepPrompt
-	stepRefineChoice
-	stepPromptReview
 	stepSlackNotify
 	stepSlackToken
 )
@@ -91,22 +75,9 @@ type wizardModel struct {
 	prTitle      string
 
 	// Prompt
-	promptInput          textinput.Model
-	prompt               string
-	useEditor            bool
-	refinedPrompt        string
-	refining             bool
-	refineErr            error
-	reviewCursor         int
-	reviewOptions        []string
-	promptAlreadyRefined bool
-	tickCount            int
-	refinedScrollOffset  int
-	refinedWrappedLines  []string
-
-	// Refine choice
-	refineOptions []string
-	refineCursor  int
+	promptInput textinput.Model
+	prompt      string
+	useEditor   bool
 
 	// Slack
 	slackNotifyOptions []string
@@ -162,8 +133,6 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []conf
 		promptInput:        promptInput,
 		slackNotifyOptions: []string{"Yes", "No"},
 		slackTokenInput:    slackTokenInput,
-		refineOptions:      []string{"Yes, refine with AI", "No, use as-is"},
-		reviewOptions:      []string{"Accept refined prompt", "Edit manually", "Keep original"},
 	}
 
 	if len(aiToolsConfig.Tools) <= 1 {
@@ -211,10 +180,6 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePRTitleStep(msg)
 	case stepPrompt:
 		return m.updatePromptStep(msg)
-	case stepRefineChoice:
-		return m.updateRefineChoiceStep(msg)
-	case stepPromptReview:
-		return m.updatePromptReviewStep(msg)
 	case stepSlackNotify:
 		return m.updateSlackNotifyStep(msg)
 	case stepSlackToken:
@@ -380,17 +345,10 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.prompt = value
 			m.promptInput.Blur()
-			if m.promptAlreadyRefined {
-				// Skip re-refinement after "Edit manually"
-				if m.action == "assessment" {
-					return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-				}
-				m.currentStep = stepSlackNotify
-				return m, nil
+			if m.action == "assessment" {
+				return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
 			}
-			// Ask if user wants AI refinement
-			m.refineCursor = 0
-			m.currentStep = stepRefineChoice
+			m.currentStep = stepSlackNotify
 			return m, nil
 		case tea.KeyEsc:
 			return m, tea.Quit
@@ -402,117 +360,6 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.promptInput, cmd = m.promptInput.Update(msg)
 	return m, cmd
-}
-
-func (m wizardModel) updateRefineChoiceStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return m, nil
-	}
-	switch keyMsg.String() {
-	case "q":
-		return m, tea.Quit
-	case "up", "k":
-		if m.refineCursor > 0 {
-			m.refineCursor--
-		}
-	case "down", "j":
-		if m.refineCursor < len(m.refineOptions)-1 {
-			m.refineCursor++
-		}
-	case "enter", " ":
-		if m.refineCursor == 0 {
-			// Yes → trigger AI refinement
-			return m, func() tea.Msg { return promptRefineRequestedMsg{Prompt: m.prompt} }
-		}
-		// No → skip refinement, proceed to next step
-		if m.action == "assessment" {
-			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-		}
-		m.currentStep = stepSlackNotify
-		return m, nil
-	}
-	return m, nil
-}
-
-func (m wizardModel) updatePromptReviewStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case wizardTickMsg:
-		if m.refining {
-			m.tickCount++
-		}
-		return m, nil
-	case promptRefinedMsg:
-		m.refining = false
-		if msg.Err != nil {
-			m.refineErr = msg.Err
-			// On error, fall back to keeping the original prompt and proceed
-			if m.action == "assessment" {
-				return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-			}
-			m.currentStep = stepSlackNotify
-			return m, nil
-		}
-		m.refinedPrompt = msg.Refined
-		m.refinedScrollOffset = 0
-		boxWidth := m.termWidth - 12
-		if boxWidth < 40 {
-			boxWidth = 40
-		}
-		m.refinedWrappedLines = wrapText(msg.Refined, boxWidth-4) // account for box border + padding
-		return m, nil
-	case tea.KeyMsg:
-		if m.refining {
-			return m, nil // Ignore keys while refining
-		}
-		switch msg.String() {
-		case "left", "h":
-			if m.refinedScrollOffset > 0 {
-				m.refinedScrollOffset--
-			}
-		case "right", "l":
-			maxScroll := len(m.refinedWrappedLines) - maxRefinedLines
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.refinedScrollOffset < maxScroll {
-				m.refinedScrollOffset++
-			}
-		case "up", "k":
-			if m.reviewCursor > 0 {
-				m.reviewCursor--
-			}
-		case "down", "j":
-			if m.reviewCursor < len(m.reviewOptions)-1 {
-				m.reviewCursor++
-			}
-		case "enter", " ":
-			switch m.reviewCursor {
-			case 0: // Accept refined prompt
-				m.prompt = m.refinedPrompt
-				if m.action == "assessment" {
-					return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-				}
-				m.currentStep = stepSlackNotify
-				return m, nil
-			case 1: // Edit manually
-				m.promptInput.SetValue(m.refinedPrompt)
-				m.promptInput.Focus()
-				m.promptAlreadyRefined = true
-				m.currentStep = stepPrompt
-				return m, textinput.Blink
-			case 2: // Keep original
-				if m.action == "assessment" {
-					return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-				}
-				m.currentStep = stepSlackNotify
-				return m, nil
-			}
-		case "q":
-			return m, tea.Quit
-		}
-	}
-	return m, nil
 }
 
 func (m wizardModel) updateSlackNotifyStep(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -620,20 +467,12 @@ func (m wizardModel) View() string {
 	// Help text
 	b.WriteString("\n")
 	switch m.currentStep {
-	case stepAITool, stepBranchStrategy, stepRefineChoice, stepSlackNotify:
+	case stepAITool, stepBranchStrategy, stepSlackNotify:
 		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
 	case stepBranchName, stepPRTitle, stepSlackToken:
 		b.WriteString(helpStyle.Render("  enter: submit • esc/ctrl+c: quit"))
 	case stepPrompt:
 		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc/ctrl+c: quit"))
-	case stepPromptReview:
-		if m.refining {
-			b.WriteString(helpStyle.Render("  Refining your prompt with AI..."))
-		} else if len(m.refinedWrappedLines) > maxRefinedLines {
-			b.WriteString(helpStyle.Render("  ↑/↓: navigate • ←/→: scroll prompt • enter: select • q/ctrl+c: quit"))
-		} else {
-			b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
-		}
 	}
 	b.WriteString("\n")
 
@@ -717,7 +556,7 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 	}
 
 	// Prompt
-	if m.prompt != "" && m.currentStep != stepPromptReview && m.currentStep != stepPrompt && m.currentStep != stepRefineChoice {
+	if m.prompt != "" && m.currentStep != stepPrompt {
 		display := m.prompt
 		if len(display) > 60 {
 			display = display[:57] + "..."
@@ -729,25 +568,6 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("    %s", m.promptInput.View()))
 		b.WriteString("\n")
-	} else if m.currentStep == stepRefineChoice {
-		display := m.prompt
-		if len(display) > 60 {
-			display = display[:57] + "..."
-		}
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Prompt: %s", display)))
-		b.WriteString("\n")
-		b.WriteString(label.Render("  Refine prompt with AI?"))
-		b.WriteString("\n")
-		for i, option := range m.refineOptions {
-			if i == m.refineCursor {
-				b.WriteString(cursor.Render(fmt.Sprintf("    > %s", option)))
-			} else {
-				b.WriteString(fmt.Sprintf("      %s", option))
-			}
-			b.WriteString("\n")
-		}
-	} else if m.currentStep == stepPromptReview {
-		m.viewPromptReview(b, completed, label, pending, cursor, hint)
 	} else {
 		b.WriteString(pending.Render("  ○ Prompt"))
 		b.WriteString("\n")
@@ -819,7 +639,7 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 	}
 
 	// Prompt
-	if m.prompt != "" && m.currentStep != stepPromptReview && m.currentStep != stepPrompt && m.currentStep != stepRefineChoice {
+	if m.prompt != "" && m.currentStep != stepPrompt {
 		display := m.prompt
 		if len(display) > 60 {
 			display = display[:57] + "..."
@@ -831,126 +651,10 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("    %s", m.promptInput.View()))
 		b.WriteString("\n")
-	} else if m.currentStep == stepRefineChoice {
-		display := m.prompt
-		if len(display) > 60 {
-			display = display[:57] + "..."
-		}
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Question: %s", display)))
-		b.WriteString("\n")
-		b.WriteString(label.Render("  Refine prompt with AI?"))
-		b.WriteString("\n")
-		for i, option := range m.refineOptions {
-			if i == m.refineCursor {
-				b.WriteString(cursor.Render(fmt.Sprintf("    > %s", option)))
-			} else {
-				b.WriteString(fmt.Sprintf("      %s", option))
-			}
-			b.WriteString("\n")
-		}
-	} else if m.currentStep == stepPromptReview {
-		m.viewPromptReview(b, completed, label, pending, cursor, hint)
 	} else {
 		b.WriteString(pending.Render("  ○ Assessment Question"))
 		b.WriteString("\n")
 	}
-}
-
-const maxRefinedLines = 10
-
-func (m wizardModel) viewPromptReview(b *strings.Builder, completed, label, pending, cursor, hint lipgloss.Style) {
-	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
-
-	if m.refining {
-		frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
-		b.WriteString(label.Render(fmt.Sprintf("  %s Refining prompt...", frame)))
-		b.WriteString("\n")
-		b.WriteString(hint.Render("    Original: " + m.prompt))
-		b.WriteString("\n")
-		return
-	}
-
-	b.WriteString(label.Render("  Review Refined Prompt"))
-	b.WriteString("\n\n")
-	b.WriteString(hint.Render("    Original: " + m.prompt))
-	b.WriteString("\n\n")
-
-	// Refined prompt in a scrollable bordered box
-	lines := m.refinedWrappedLines
-	// outer border(2) + outer padding(2) + indent(4) + box border(2) + box padding(2) = 12
-	boxWidth := m.termWidth - 12
-	if boxWidth < 40 {
-		boxWidth = 40
-	}
-
-	start := m.refinedScrollOffset
-	end := start + maxRefinedLines
-	if end > len(lines) {
-		end = len(lines)
-	}
-
-	var contentLines []string
-	if start > 0 {
-		contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)))
-	}
-	for _, line := range lines[start:end] {
-		contentLines = append(contentLines, lineStyle.Render(line))
-	}
-	if len(lines)-end > 0 {
-		contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(lines)-end)))
-	}
-
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("40")).
-		Padding(0, 1).
-		Width(boxWidth)
-
-	rendered := boxStyle.Render(strings.Join(contentLines, "\n"))
-	for _, boxLine := range strings.Split(rendered, "\n") {
-		b.WriteString("    " + boxLine + "\n")
-	}
-
-	b.WriteString("\n")
-	b.WriteString(hint.Render("    These projects may differ in language, framework, and structure."))
-	b.WriteString("\n\n")
-
-	for i, option := range m.reviewOptions {
-		if i == m.reviewCursor {
-			b.WriteString(cursor.Render(fmt.Sprintf("    > %s", option)))
-		} else {
-			b.WriteString(fmt.Sprintf("      %s", option))
-		}
-		b.WriteString("\n")
-	}
-}
-
-// wrapText splits text into lines that fit within the given width.
-func wrapText(text string, width int) []string {
-	if width <= 0 {
-		width = 40
-	}
-	var result []string
-	for _, line := range strings.Split(text, "\n") {
-		if len(line) <= width {
-			result = append(result, line)
-			continue
-		}
-		for len(line) > width {
-			idx := strings.LastIndex(line[:width], " ")
-			if idx <= 0 {
-				idx = width
-			}
-			result = append(result, line[:idx])
-			line = strings.TrimSpace(line[idx:])
-		}
-		if line != "" {
-			result = append(result, line)
-		}
-	}
-	return result
 }
 
 func formatProjectsSummary(projects []config.Project) string {
