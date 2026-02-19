@@ -405,8 +405,7 @@ func (m progressModel) handlePermissionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 			m.permissionCmdScroll--
 		}
 	case "down", "j":
-		cmdLines := strings.Split(m.currentPermission.Command, "\n")
-		maxScroll := len(cmdLines) - maxPermissionCmdLines
+		maxScroll := m.countWrappedLines() - maxPermissionCmdLines
 		if maxScroll < 0 {
 			maxScroll = 0
 		}
@@ -570,6 +569,25 @@ func extractPattern(command string) string {
 		return "*"
 	}
 	return parts[0] + " *"
+}
+
+func (m progressModel) countWrappedLines() int {
+	if m.currentPermission == nil {
+		return 0
+	}
+	maxContentWidth := m.termWidth - 10 - 4
+	if maxContentWidth < 36 {
+		maxContentWidth = 36
+	}
+	total := 0
+	for _, line := range strings.Split(m.currentPermission.Command, "\n") {
+		if len(line) == 0 {
+			total++
+		} else {
+			total += (len(line)-1)/maxContentWidth + 1
+		}
+	}
+	return total
 }
 
 func (m progressModel) View() string {
@@ -778,8 +796,8 @@ func (m progressModel) View() string {
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	var hints []string
 	if m.currentPermission != nil && !m.currentPermission.IsQuestion {
-		cmdLines := strings.Split(m.currentPermission.Command, "\n")
-		if len(cmdLines) > maxPermissionCmdLines {
+		totalWrapped := m.countWrappedLines()
+		if totalWrapped > maxPermissionCmdLines {
 			hints = append(hints, helpStyle.Render("↑↓: scroll command"))
 		}
 	} else {
@@ -814,7 +832,11 @@ func (m progressModel) renderPermissionPrompt() string {
 		repoName = "repo"
 	}
 
-	b.WriteString(lockStyle.Render(fmt.Sprintf("🔐 [%s] wants to run:", repoName)))
+	toolLabel := m.currentPermission.ToolName
+	if toolLabel == "" {
+		toolLabel = "command"
+	}
+	b.WriteString(lockStyle.Render(fmt.Sprintf("🔐 [%s] wants to run %s:", repoName, toolLabel)))
 	b.WriteString("\n")
 
 	cmdLines := strings.Split(m.currentPermission.Command, "\n")
@@ -824,28 +846,35 @@ func (m progressModel) renderPermissionPrompt() string {
 	}
 	maxContentWidth := boxWidth - 4
 
-	// Determine visible window
-	visibleLines := len(cmdLines)
+	// Wrap long lines so the full command is visible
+	var wrappedLines []string
+	for _, line := range cmdLines {
+		for len(line) > maxContentWidth {
+			wrappedLines = append(wrappedLines, line[:maxContentWidth])
+			line = line[maxContentWidth:]
+		}
+		wrappedLines = append(wrappedLines, line)
+	}
+
+	// Determine visible window from wrapped lines
+	visibleLines := len(wrappedLines)
 	if visibleLines > maxPermissionCmdLines {
 		visibleLines = maxPermissionCmdLines
 	}
 	start := m.permissionCmdScroll
 	end := start + visibleLines
-	if end > len(cmdLines) {
-		end = len(cmdLines)
+	if end > len(wrappedLines) {
+		end = len(wrappedLines)
 	}
 
 	var rendered []string
 	if start > 0 {
 		rendered = append(rendered, dimStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
 	}
-	for _, line := range cmdLines[start:end] {
-		if len(line) > maxContentWidth {
-			line = line[:maxContentWidth-3] + "..."
-		}
+	for _, line := range wrappedLines[start:end] {
 		rendered = append(rendered, cmdStyle.Render(line))
 	}
-	if remaining := len(cmdLines) - end; remaining > 0 {
+	if remaining := len(wrappedLines) - end; remaining > 0 {
 		rendered = append(rendered, dimStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
 	}
 
@@ -854,8 +883,11 @@ func (m progressModel) renderPermissionPrompt() string {
 		BorderForeground(lipgloss.Color("238")).
 		Padding(0, 1).
 		Width(boxWidth)
-	b.WriteString("  " + cmdBox.Render(strings.Join(rendered, "\n")))
-	b.WriteString("\n\n")
+	renderedBox := cmdBox.Render(strings.Join(rendered, "\n"))
+	for _, line := range strings.Split(renderedBox, "\n") {
+		b.WriteString("  " + line + "\n")
+	}
+	b.WriteString("\n")
 
 	pattern := extractPattern(m.currentPermission.Command)
 	options := []string{

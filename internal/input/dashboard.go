@@ -271,6 +271,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 	m.cancelRegistry = &CancelRegistry{}
 	m.slackConfirmCh = make(chan bool, 1)
 	m.progress = NewProgressModel(repos, checkpointInterval, m.wizardResult.BranchName, m.wizardResult.PRTitle, m.wizardResult.Prompt)
+	m.progress.termWidth = m.termWidth
 	m.progress.cancelRegistry = m.cancelRegistry
 	m.phase = phaseProcessing
 
