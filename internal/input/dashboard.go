@@ -76,6 +76,7 @@ type dashboardModel struct {
 
 	// Processing control
 	resumeCh       chan struct{}
+	slackConfirmCh chan bool
 	cancelRegistry *CancelRegistry
 
 	// Permission server
@@ -318,6 +319,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 	}
 
 	m.cancelRegistry = &CancelRegistry{}
+	m.slackConfirmCh = make(chan bool, 1)
 	m.progress = NewProgressModel(repos, checkpointInterval, m.wizardResult.BranchName, m.wizardResult.PRTitle, m.wizardResult.Prompt)
 	m.progress.cancelRegistry = m.cancelRegistry
 	m.phase = phaseProcessing
@@ -328,6 +330,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 			m.statusCh <- msg
 		},
 		ResumeCh:       m.resumeCh,
+		SlackConfirmCh: m.slackConfirmCh,
 		CancelRegistry: m.cancelRegistry,
 	}
 
@@ -386,6 +389,11 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resumeCh <- struct{}{}
 		}
 		return m, nil
+	case slackConfirmResponseMsg:
+		if m.slackConfirmCh != nil {
+			m.slackConfirmCh <- msg.Approved
+		}
+		return m, nil
 	case cancelProjectMsg:
 		if m.cancelRegistry != nil {
 			m.cancelRegistry.Cancel(msg.Repo)
@@ -404,7 +412,7 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Pump status channel messages
 	var cmds []tea.Cmd
 	switch msg.(type) {
-	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, AssessmentResultMsg:
+	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, AssessmentResultMsg, slackConfirmMsg:
 		cmds = append(cmds, listenForStatus(m.statusCh))
 	}
 

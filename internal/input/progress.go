@@ -14,6 +14,7 @@ import (
 )
 
 const maxVisibleProjects = 10
+const maxPermissionCmdLines = 8
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -73,10 +74,21 @@ type AssessmentResultMsg struct {
 	Findings map[string]string
 }
 
+// slackConfirmMsg asks the user to confirm sending Slack notifications.
+type slackConfirmMsg struct {
+	Channels []string
+}
+
+// slackConfirmResponseMsg carries the user's response to the Slack confirmation.
+type slackConfirmResponseMsg struct {
+	Approved bool
+}
+
 // StatusSender sends status updates to the progress dashboard.
 type StatusSender struct {
 	send           func(tea.Msg)
 	ResumeCh       chan struct{}
+	SlackConfirmCh chan bool
 	MCPConfigPath  string
 	CancelRegistry *CancelRegistry
 }
@@ -109,6 +121,13 @@ func (s *StatusSender) AssessmentResult(summary string, findings map[string]stri
 	s.send(AssessmentResultMsg{Summary: summary, Findings: findings})
 }
 
+// RequestSlackConfirm asks the user to confirm Slack notifications and blocks until answered.
+// Returns true if the user approved.
+func (s *StatusSender) RequestSlackConfirm(channels []string) bool {
+	s.send(slackConfirmMsg{Channels: channels})
+	return <-s.SlackConfirmCh
+}
+
 // Finish signals that all processing (including post-processing) is done.
 func (s *StatusSender) Finish() {
 	s.send(processingDoneMsg{})
@@ -130,6 +149,11 @@ type progressModel struct {
 	checkpointInterval int
 	nextCheckpoint     int
 
+	// Slack confirmation
+	slackConfirmPending  bool
+	slackConfirmChannels []string
+	slackConfirmCursor   int // 0=Yes, 1=No
+
 	// Spinner animation
 	tickCount int
 
@@ -143,10 +167,11 @@ type progressModel struct {
 	cancelled      map[string]bool
 
 	// Permission prompting
-	permissionQueue   []permission.PermissionRequest
-	currentPermission *permission.PermissionRequest
-	permissionChoice  int // 0=approve, 1=deny, 2=approve-all
-	approvedPatterns  map[string]bool
+	permissionQueue     []permission.PermissionRequest
+	currentPermission   *permission.PermissionRequest
+	permissionChoice    int // 0=approve, 1=deny, 2=approve-all
+	approvedPatterns    map[string]bool
+	permissionCmdScroll int // scroll offset for the command box
 
 	// Question prompting (AskUserQuestion)
 	questionOptionIdx int // currently highlighted option index
@@ -214,6 +239,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case PostStatusMsg:
 		m.postLines = append(m.postLines, msg.Line)
+	case slackConfirmMsg:
+		m.slackConfirmPending = true
+		m.slackConfirmChannels = msg.Channels
+		m.slackConfirmCursor = 0
 	case permission.PermissionRequestMsg:
 		return m.handlePermissionRequest(msg.Request)
 	case tickMsg:
@@ -223,6 +252,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Permission input takes priority
 		if m.currentPermission != nil {
 			return m.handlePermissionKey(msg)
+		}
+		// Slack confirmation
+		if m.slackConfirmPending {
+			return m.handleSlackConfirmKey(msg)
 		}
 		if m.paused && msg.String() == "enter" {
 			m.paused = false
@@ -336,6 +369,7 @@ func (m progressModel) handlePermissionRequest(req permission.PermissionRequest)
 	// Enqueue or show immediately
 	if m.currentPermission == nil {
 		m.currentPermission = &req
+		m.permissionCmdScroll = 0
 		if req.IsQuestion {
 			m.questionOptionIdx = 0
 		} else {
@@ -366,6 +400,19 @@ func (m progressModel) handlePermissionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		// Auto-approve any queued requests matching this pattern
 		m = m.drainAutoApproved()
 		return m.advancePermissionQueue(), nil
+	case "up", "k":
+		if m.permissionCmdScroll > 0 {
+			m.permissionCmdScroll--
+		}
+	case "down", "j":
+		cmdLines := strings.Split(m.currentPermission.Command, "\n")
+		maxScroll := len(cmdLines) - maxPermissionCmdLines
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.permissionCmdScroll < maxScroll {
+			m.permissionCmdScroll++
+		}
 	case "left", "h":
 		if m.permissionChoice > 0 {
 			m.permissionChoice--
@@ -462,6 +509,7 @@ func (m progressModel) advancePermissionQueue() progressModel {
 		}
 
 		m.currentPermission = &next
+		m.permissionCmdScroll = 0
 		if next.IsQuestion {
 			m.questionOptionIdx = 0
 		} else {
@@ -469,8 +517,36 @@ func (m progressModel) advancePermissionQueue() progressModel {
 		}
 	} else {
 		m.currentPermission = nil
+		m.permissionCmdScroll = 0
 	}
 	return m
+}
+
+func (m progressModel) handleSlackConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "h":
+		if m.slackConfirmCursor > 0 {
+			m.slackConfirmCursor--
+		}
+	case "right", "l":
+		if m.slackConfirmCursor < 1 {
+			m.slackConfirmCursor++
+		}
+	case "y":
+		m.slackConfirmPending = false
+		return m, func() tea.Msg { return slackConfirmResponseMsg{Approved: true} }
+	case "n":
+		m.slackConfirmPending = false
+		return m, func() tea.Msg { return slackConfirmResponseMsg{Approved: false} }
+	case "enter":
+		m.slackConfirmPending = false
+		approved := m.slackConfirmCursor == 0
+		return m, func() tea.Msg { return slackConfirmResponseMsg{Approved: approved} }
+	case "ctrl+c":
+		m.quitted = true
+		return m, tea.Quit
+	}
+	return m, nil
 }
 
 func (m progressModel) drainAutoApproved() progressModel {
@@ -624,6 +700,35 @@ func (m progressModel) View() string {
 		b.WriteString("\n\n")
 	}
 
+	// Slack confirmation prompt
+	if m.slackConfirmPending {
+		slackStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		b.WriteString(slackStyle.Render("📨  Send Slack notifications to the following channels?"))
+		b.WriteString("\n")
+		channelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+		for _, ch := range m.slackConfirmChannels {
+			b.WriteString(channelStyle.Render(fmt.Sprintf("    • #%s", ch)))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+
+		selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+		normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		options := []string{"Yes (y)", "No (n)"}
+		b.WriteString("  ")
+		for i, opt := range options {
+			if i == m.slackConfirmCursor {
+				b.WriteString(selectedStyle.Render("> " + opt))
+			} else {
+				b.WriteString(normalStyle.Render("  " + opt))
+			}
+			if i < len(options)-1 {
+				b.WriteString("    ")
+			}
+		}
+		b.WriteString("\n\n")
+	}
+
 	// Per-project status lines (sorted by status, with scrolling)
 	sorted := m.sortedRepos()
 	start, end := m.visibleWindow(sorted)
@@ -672,7 +777,14 @@ func (m progressModel) View() string {
 	b.WriteString("\n")
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	var hints []string
-	hints = append(hints, helpStyle.Render("↑↓: navigate"))
+	if m.currentPermission != nil && !m.currentPermission.IsQuestion {
+		cmdLines := strings.Split(m.currentPermission.Command, "\n")
+		if len(cmdLines) > maxPermissionCmdLines {
+			hints = append(hints, helpStyle.Render("↑↓: scroll command"))
+		}
+	} else {
+		hints = append(hints, helpStyle.Render("↑↓: navigate"))
+	}
 	if m.cursorOnPrompt {
 		if m.promptExpanded {
 			hints = append(hints, helpStyle.Render("enter: collapse"))
@@ -703,8 +815,46 @@ func (m progressModel) renderPermissionPrompt() string {
 	}
 
 	b.WriteString(lockStyle.Render(fmt.Sprintf("🔐 [%s] wants to run:", repoName)))
-	b.WriteString("  ")
-	b.WriteString(cmdStyle.Render(m.currentPermission.Command))
+	b.WriteString("\n")
+
+	cmdLines := strings.Split(m.currentPermission.Command, "\n")
+	boxWidth := m.termWidth - 10
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	maxContentWidth := boxWidth - 4
+
+	// Determine visible window
+	visibleLines := len(cmdLines)
+	if visibleLines > maxPermissionCmdLines {
+		visibleLines = maxPermissionCmdLines
+	}
+	start := m.permissionCmdScroll
+	end := start + visibleLines
+	if end > len(cmdLines) {
+		end = len(cmdLines)
+	}
+
+	var rendered []string
+	if start > 0 {
+		rendered = append(rendered, dimStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
+	}
+	for _, line := range cmdLines[start:end] {
+		if len(line) > maxContentWidth {
+			line = line[:maxContentWidth-3] + "..."
+		}
+		rendered = append(rendered, cmdStyle.Render(line))
+	}
+	if remaining := len(cmdLines) - end; remaining > 0 {
+		rendered = append(rendered, dimStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
+	}
+
+	cmdBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("238")).
+		Padding(0, 1).
+		Width(boxWidth)
+	b.WriteString("  " + cmdBox.Render(strings.Join(rendered, "\n")))
 	b.WriteString("\n\n")
 
 	pattern := extractPattern(m.currentPermission.Command)

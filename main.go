@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 
@@ -557,7 +558,29 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 		}
 
 		if len(successfulProjects) > 0 {
-			slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
+			// Collect unique channels for the confirmation prompt
+			channelSet := make(map[string]bool)
+			for _, p := range successfulProjects {
+				room := strings.TrimSpace(p.SlackRoom)
+				if room != "" {
+					channelSet[room] = true
+				}
+			}
+			var channels []string
+			for ch := range channelSet {
+				channels = append(channels, ch)
+			}
+			sort.Strings(channels)
+
+			if len(channels) > 0 && sender.SlackConfirmCh != nil {
+				if sender.RequestSlackConfirm(channels) {
+					slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
+				} else {
+					sender.PostStatus("Slack notifications skipped by user.")
+				}
+			} else if len(channels) > 0 {
+				slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
+			}
 		}
 	}
 }
