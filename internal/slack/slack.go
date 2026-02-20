@@ -63,7 +63,7 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 			repoNames[i] = r.Repo
 		}
 		if err != nil {
-			onStatus(fmt.Sprintf("⚠️  Failed to send notification to %s: %v", channel, err))
+			onStatus(fmt.Sprintf("⚠️  Failed to send notification to %s for: %s: %v", channel, strings.Join(repoNames, ", "), err))
 		} else {
 			onStatus(fmt.Sprintf("✓ Notification sent to %s for: %s", channel, strings.Join(repoNames, ", ")))
 		}

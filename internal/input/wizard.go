@@ -461,7 +461,7 @@ func (m wizardModel) View() string {
 	case "local":
 		m.viewLocalFields(&b, completedStyle, labelStyle, pendingStyle, cursorStyle, hintStyle)
 	case "assessment":
-		m.viewAssessmentFields(&b, completedStyle, labelStyle, pendingStyle, cursorStyle)
+		m.viewAssessmentFields(&b, completedStyle, labelStyle, pendingStyle, cursorStyle, hintStyle)
 	}
 
 	// Help text
@@ -556,7 +556,7 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 	}
 
 	// Prompt
-	if m.prompt != "" {
+	if m.prompt != "" && m.currentStep != stepPrompt {
 		display := m.prompt
 		if len(display) > 60 {
 			display = display[:57] + "..."
@@ -614,7 +614,7 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 	}
 }
 
-func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, pending, cursor lipgloss.Style) {
+func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, pending, cursor, hint lipgloss.Style) {
 	// AI Tool
 	if !m.skipAITool {
 		if m.aiTool != nil {
@@ -639,7 +639,7 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 	}
 
 	// Prompt
-	if m.prompt != "" {
+	if m.prompt != "" && m.currentStep != stepPrompt {
 		display := m.prompt
 		if len(display) > 60 {
 			display = display[:57] + "..."

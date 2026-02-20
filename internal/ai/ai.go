@@ -83,7 +83,7 @@ func SummarizeFindings(ctx context.Context, aiTool *config.AITool, findings map[
 }
 
 func GeneratePRDescription(ctx context.Context, aiTool *config.AITool, project config.Project, aiOutput string, targetPath string) (string, error) {
-	summaryPrompt := fmt.Sprintf("Given the changes below, produce a 2-3 sentence PR description. Do not include any introductory text, headers, or commentary — respond with the description only.\n\nChanges:\n%s", aiOutput)
+	summaryPrompt := fmt.Sprintf("Given the changes below, produce a 2-3 sentence PR description. Do not include any introductory text, headers, or commentary - respond with the description only.\n\nChanges:\n%s", aiOutput)
 
 	cmd := aiTool.BuildCommandContext(ctx, summaryPrompt, aiTool.SummaryArgs)
 	cmd.Dir = targetPath
