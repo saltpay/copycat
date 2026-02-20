@@ -74,6 +74,11 @@ type AssessmentResultMsg struct {
 	Findings map[string]string
 }
 
+// assessSlackDoneMsg carries the results of sending assessment Slack notifications.
+type assessSlackDoneMsg struct {
+	Results []string
+}
+
 // slackConfirmMsg asks the user to confirm sending Slack notifications.
 type slackConfirmMsg struct {
 	Channels []string
@@ -785,7 +790,12 @@ func (m progressModel) View() string {
 	if len(m.postLines) > 0 {
 		b.WriteString("\n")
 		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		for _, line := range m.postLines {
+		for i, line := range m.postLines {
+			isLast := i == len(m.postLines)-1
+			// Show spinner on the last line if it looks like an in-progress step
+			if isLast && !strings.HasPrefix(line, "✓") && !strings.HasPrefix(line, "⚠") {
+				b.WriteString(spinnerStyle.Render(frame) + " ")
+			}
 			b.WriteString(dimStyle.Render(line))
 			b.WriteString("\n")
 		}

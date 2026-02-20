@@ -70,6 +70,62 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 	}
 }
 
+// SendAssessmentFindings sends per-project assessment findings to Slack, grouped by channel.
+func SendAssessmentFindings(projects []config.Project, question string, findings map[string]string, token string, onStatus func(string)) {
+	if len(projects) == 0 {
+		return
+	}
+
+	// Group projects by Slack room
+	projectsByRoom := make(map[string][]string)
+	for _, project := range projects {
+		slackRoom := strings.TrimSpace(project.SlackRoom)
+		if slackRoom == "" {
+			continue
+		}
+		projectsByRoom[slackRoom] = append(projectsByRoom[slackRoom], project.Repo)
+	}
+
+	if len(projectsByRoom) == 0 {
+		onStatus("⚠️  No Slack rooms configured for assessed projects, skipping notifications")
+		return
+	}
+
+	onStatus("Sending assessment findings to Slack...")
+
+	for channel, repos := range projectsByRoom {
+		// Build findings for repos in this channel
+		repoFindings := make(map[string]string)
+		for _, repo := range repos {
+			if finding, ok := findings[repo]; ok {
+				repoFindings[repo] = finding
+			}
+		}
+		if len(repoFindings) == 0 {
+			continue
+		}
+
+		message := formatAssessmentMessage(question, repoFindings)
+		err := sendMessage(token, channel, message)
+		repoNames := strings.Join(repos, ", ")
+		if err != nil {
+			onStatus(fmt.Sprintf("⚠️  Failed to send findings to %s for: %s: %v", channel, repoNames, err))
+		} else {
+			onStatus(fmt.Sprintf("✓ Findings sent to %s for: %s", channel, repoNames))
+		}
+	}
+}
+
+func formatAssessmentMessage(question string, repoFindings map[string]string) string {
+	var sb strings.Builder
+	sb.WriteString("🐱 *Assessment Results*\n\n")
+	sb.WriteString(fmt.Sprintf("> Question: %s\n\n", question))
+	for repo, finding := range repoFindings {
+		sb.WriteString(fmt.Sprintf("[%s] %s\n", repo, finding))
+	}
+	return sb.String()
+}
+
 func formatMessage(prTitle string, repos []repoWithURL) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("🐱 *%s*\n\n", prTitle))

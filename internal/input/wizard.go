@@ -346,7 +346,8 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prompt = value
 			m.promptInput.Blur()
 			if m.action == "assessment" {
-				return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
+				m.currentStep = stepSlackNotify
+				return m, nil
 			}
 			m.currentStep = stepSlackNotify
 			return m, nil
@@ -654,6 +655,46 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 	} else {
 		b.WriteString(pending.Render("  ○ Assessment Question"))
 		b.WriteString("\n")
+	}
+
+	// Slack Notify
+	if m.slackDecided {
+		if m.sendSlack {
+			b.WriteString(completed.Render("  ✓ Slack Notifications: Yes"))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(completed.Render("  ✓ Slack Notifications: No"))
+			b.WriteString("\n")
+		}
+	} else if m.currentStep == stepSlackNotify {
+		b.WriteString(label.Render("  Send Slack Notifications?"))
+		b.WriteString("\n")
+		for i, option := range m.slackNotifyOptions {
+			if i == m.slackNotifyCursor {
+				b.WriteString(cursor.Render(fmt.Sprintf("    > %s", option)))
+			} else {
+				b.WriteString(fmt.Sprintf("      %s", option))
+			}
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString(pending.Render("  ○ Slack Notifications"))
+		b.WriteString("\n")
+	}
+
+	// Slack Token (conditional)
+	if m.sendSlack {
+		if m.slackToken != "" {
+			b.WriteString(completed.Render("  ✓ Slack Token: ****"))
+			b.WriteString("\n")
+		} else if m.currentStep == stepSlackToken {
+			b.WriteString(label.Render("  Slack Bot Token"))
+			b.WriteString("\n")
+			b.WriteString(hint.Render("    Pre-filled from $SLACK_BOT_TOKEN if set"))
+			b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("    %s", m.slackTokenInput.View()))
+			b.WriteString("\n")
+		}
 	}
 }
 
