@@ -155,22 +155,25 @@ func handleToolCall(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 
 	resp, err := http.Post(baseURL+"/permission", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return respondToolResult(req.ID, false, "")
+		return respondDeny(req.ID, "failed to contact permission server")
 	}
 	defer resp.Body.Close()
 
 	var httpResp permissionHTTPResponse
 	if err := json.NewDecoder(resp.Body).Decode(&httpResp); err != nil {
-		return respondToolResult(req.ID, false, "")
+		return respondDeny(req.ID, "failed to decode permission response")
 	}
 
 	// For AskUserQuestion, always deny the tool but include the user's answer
 	// so Claude can proceed with that information
 	if args.ToolName == "AskUserQuestion" && httpResp.Answer != "" {
-		return respondToolResult(req.ID, false, httpResp.Answer)
+		return respondDeny(req.ID, fmt.Sprintf("User answered: %s", httpResp.Answer))
 	}
 
-	return respondToolResult(req.ID, httpResp.Approved, "")
+	if httpResp.Approved {
+		return respondAllow(req.ID, args.Input)
+	}
+	return respondDeny(req.ID, "User denied permission")
 }
 
 // extractQuestions parses the AskUserQuestion input into structured question data.
@@ -253,16 +256,30 @@ func respondError(id json.RawMessage, code int, message string) jsonRPCResponse 
 	}
 }
 
-func respondToolResult(id json.RawMessage, approved bool, userAnswer string) jsonRPCResponse {
-	text := fmt.Sprintf(`{"approved": %v}`, approved)
-	if userAnswer != "" {
-		text = fmt.Sprintf(`{"approved": false, "user_response": "User answered: %s"}`, userAnswer)
-	}
+func respondAllow(id json.RawMessage, updatedInput json.RawMessage) jsonRPCResponse {
 	result := map[string]any{
 		"content": []map[string]any{
 			{
 				"type": "text",
-				"text": text,
+				"text": fmt.Sprintf(`{"behavior":"allow","updatedInput":%s}`, updatedInput),
+			},
+		},
+	}
+	data, _ := json.Marshal(result)
+	return jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  data,
+	}
+}
+
+func respondDeny(id json.RawMessage, message string) jsonRPCResponse {
+	msgJSON, _ := json.Marshal(message)
+	result := map[string]any{
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": fmt.Sprintf(`{"behavior":"deny","message":%s}`, msgJSON),
 			},
 		},
 	}
