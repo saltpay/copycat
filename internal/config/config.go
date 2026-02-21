@@ -21,9 +21,10 @@ type GitHubConfig struct {
 }
 
 type Config struct {
-	GitHub        GitHubConfig `yaml:"github"`
-	Parallelism   int          `yaml:"parallelism,omitempty"`
-	AIToolsConfig `yaml:",inline"`
+	GitHub            GitHubConfig `yaml:"github"`
+	Parallelism       int          `yaml:"parallelism,omitempty"`
+	AgentInstructions []string     `yaml:"agent_instructions,omitempty"`
+	AIToolsConfig     `yaml:",inline"`
 }
 
 type AITool struct {
@@ -149,13 +150,25 @@ func (c *Config) Save(filename string) error {
 		return fmt.Errorf("failed to encode github config: %w", err)
 	}
 
+	var agentData []byte
+	if len(c.AgentInstructions) > 0 {
+		agentData, err = yaml.Marshal(map[string][]string{"agent_instructions": c.AgentInstructions})
+		if err != nil {
+			return fmt.Errorf("failed to encode agent_instructions config: %w", err)
+		}
+	}
+
 	toolsData, err := yaml.Marshal(map[string][]AITool{"tools": c.Tools})
 	if err != nil {
 		return fmt.Errorf("failed to encode tools config: %w", err)
 	}
 
 	// Combine with blank lines between sections
-	data := string(githubData) + "\n" + string(toolsData)
+	data := string(githubData) + "\n"
+	if len(agentData) > 0 {
+		data += string(agentData) + "\n"
+	}
+	data += string(toolsData)
 
 	if err := os.WriteFile(filename, []byte(data), 0o600); err != nil {
 		return fmt.Errorf("failed to write config to %s: %w", filename, err)
