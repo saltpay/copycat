@@ -765,6 +765,17 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 					repo := m.slackRepos[m.slackCursor]
 					m.slackSelected[repo] = !m.slackSelected[repo]
 				}
+			case "a":
+				allSelected := true
+				for _, repo := range m.slackRepos {
+					if !m.slackSelected[repo] {
+						allSelected = false
+						break
+					}
+				}
+				for _, repo := range m.slackRepos {
+					m.slackSelected[repo] = !allSelected
+				}
 			}
 			return m, nil
 
@@ -1655,6 +1666,7 @@ func (m dashboardModel) renderDoneHelp() string {
 		case notifPhaseReady:
 			hints = append(hints, helpStyle.Render("↑↓: navigate"))
 			hints = append(hints, helpStyle.Render("space/x: toggle"))
+			hints = append(hints, helpStyle.Render("a: select all"))
 		case notifPhaseSending:
 			hints = append(hints, helpStyle.Render("sending..."))
 		}
