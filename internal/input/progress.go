@@ -17,6 +17,7 @@ const maxVisibleProjects = 10
 const maxPermissionCmdLines = 8
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+var spinnerColors = []string{"205", "213", "141", "111", "75", "33", "40", "48", "214", "208"}
 
 // CancelRegistry is a thread-safe map of repo -> context.CancelFunc.
 type CancelRegistry struct {
@@ -671,7 +672,8 @@ func (m progressModel) View() string {
 	}
 
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
+	spinnerColor := spinnerColors[m.tickCount%len(spinnerColors)]
+	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(spinnerColor))
 	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
 	for _, repo := range sorted[start:end] {
