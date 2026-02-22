@@ -22,13 +22,14 @@ type wizardStep int
 
 const (
 	stepAction wizardStep = iota
-	// Local changes path
 	stepAITool
-	stepIgnoreInstructions
+	// Local changes path
 	stepBranchStrategy
 	stepBranchName
 	stepPRTitle
+	// Shared
 	stepPrompt
+	stepIgnoreInstructions
 )
 
 // WizardResult holds all values collected by the setup wizard.
@@ -58,10 +59,10 @@ type wizardModel struct {
 	skipAITool   bool
 
 	// Ignore agent instructions
-	ignoreInstructionsCursor int
-	ignoreInstructions       bool
-	ignoreInstructionsSet    bool
-	skipIgnoreInstructions   bool
+	agentInstructions      []string
+	ignoreInstructions     bool
+	ignoreInstructionsSet  bool
+	skipIgnoreInstructions bool
 
 	// Branch strategy
 	branchOptions  []string
@@ -136,6 +137,8 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, agentInstructions []str
 
 	if len(agentInstructions) == 0 {
 		m.skipIgnoreInstructions = true
+	} else {
+		m.agentInstructions = agentInstructions
 	}
 
 	return m
@@ -197,13 +200,17 @@ func (m wizardModel) updateActionStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case 0:
 			m.action = "local"
 			if m.skipAITool {
-				return m.advanceFromAITool()
+				m.currentStep = stepBranchStrategy
+			} else {
+				m.currentStep = stepAITool
 			}
-			m.currentStep = stepAITool
 		case 1:
 			m.action = "assessment"
 			if m.skipAITool {
-				return m.advanceFromAITool()
+				m.promptInput.Placeholder = "Enter your assessment question (e.g., Are these projects using circuit breakers?)"
+				m.promptInput.Focus()
+				m.currentStep = stepPrompt
+				return m, textinput.Blink
 			}
 			m.currentStep = stepAITool
 		}
@@ -229,29 +236,14 @@ func (m wizardModel) updateAIToolStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "enter", " ":
 		m.aiTool = &m.aiTools[m.aiToolCursor]
-		return m.advanceFromAITool()
+		if m.action == "assessment" {
+			m.promptInput.Placeholder = "Enter your assessment question (e.g., Are these projects using circuit breakers?)"
+			m.promptInput.Focus()
+			m.currentStep = stepPrompt
+			return m, textinput.Blink
+		}
+		m.currentStep = stepBranchStrategy
 	}
-	return m, nil
-}
-
-// advanceFromAITool moves to the next step after the AI tool is selected (or skipped).
-func (m wizardModel) advanceFromAITool() (tea.Model, tea.Cmd) {
-	if !m.skipIgnoreInstructions {
-		m.currentStep = stepIgnoreInstructions
-		return m, nil
-	}
-	return m.advanceFromIgnoreInstructions()
-}
-
-// advanceFromIgnoreInstructions moves to the next step after ignore-instructions is handled.
-func (m wizardModel) advanceFromIgnoreInstructions() (tea.Model, tea.Cmd) {
-	if m.action == "assessment" {
-		m.promptInput.Placeholder = "Enter your assessment question (e.g., Are these projects using circuit breakers?)"
-		m.promptInput.Focus()
-		m.currentStep = stepPrompt
-		return m, textinput.Blink
-	}
-	m.currentStep = stepBranchStrategy
 	return m, nil
 }
 
@@ -263,18 +255,11 @@ func (m wizardModel) updateIgnoreInstructionsStep(msg tea.Msg) (tea.Model, tea.C
 	switch keyMsg.String() {
 	case "q":
 		return m, tea.Quit
-	case "up", "k":
-		if m.ignoreInstructionsCursor > 0 {
-			m.ignoreInstructionsCursor--
-		}
-	case "down", "j":
-		if m.ignoreInstructionsCursor < 1 {
-			m.ignoreInstructionsCursor++
-		}
-	case "enter", " ":
-		m.ignoreInstructions = m.ignoreInstructionsCursor == 0
+	case " ":
+		m.ignoreInstructions = !m.ignoreInstructions
+	case "enter":
 		m.ignoreInstructionsSet = true
-		return m.advanceFromIgnoreInstructions()
+		return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
 	}
 	return m, nil
 }
@@ -367,6 +352,10 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.prompt = value
 			m.promptInput.Blur()
+			if !m.skipIgnoreInstructions {
+				m.currentStep = stepIgnoreInstructions
+				return m, nil
+			}
 			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
 		case tea.KeyEsc:
 			return m, tea.Quit
@@ -435,12 +424,14 @@ func (m wizardModel) View() string {
 	// Help text
 	b.WriteString("\n")
 	switch m.currentStep {
-	case stepAITool, stepIgnoreInstructions, stepBranchStrategy:
+	case stepAITool, stepBranchStrategy:
 		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
 	case stepBranchName, stepPRTitle:
 		b.WriteString(helpStyle.Render("  enter: submit • esc/ctrl+c: quit"))
 	case stepPrompt:
 		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc/ctrl+c: quit"))
+	case stepIgnoreInstructions:
+		b.WriteString(helpStyle.Render("  space: toggle • enter: confirm • q/ctrl+c: quit"))
 	}
 	b.WriteString("\n")
 
@@ -469,11 +460,6 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 			b.WriteString(pending.Render("  ○ AI Tool"))
 			b.WriteString("\n")
 		}
-	}
-
-	// Ignore Agent Instructions
-	if !m.skipIgnoreInstructions {
-		m.viewIgnoreInstructions(b, completed, label, pending, cursor)
 	}
 
 	// Branch Strategy
@@ -545,6 +531,11 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 		b.WriteString(pending.Render("  ○ Prompt"))
 		b.WriteString("\n")
 	}
+
+	// Ignore Agent Instructions (after prompt)
+	if !m.skipIgnoreInstructions {
+		m.viewIgnoreInstructions(b, completed, label, pending, cursor, hint)
+	}
 }
 
 func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, pending, cursor, hint lipgloss.Style) {
@@ -571,11 +562,6 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 		}
 	}
 
-	// Ignore Agent Instructions
-	if !m.skipIgnoreInstructions {
-		m.viewIgnoreInstructions(b, completed, label, pending, cursor)
-	}
-
 	// Prompt
 	if m.prompt != "" && m.currentStep != stepPrompt {
 		display := m.prompt
@@ -593,9 +579,14 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 		b.WriteString(pending.Render("  ○ Assessment Question"))
 		b.WriteString("\n")
 	}
+
+	// Ignore Agent Instructions (after prompt)
+	if !m.skipIgnoreInstructions {
+		m.viewIgnoreInstructions(b, completed, label, pending, cursor, hint)
+	}
 }
 
-func (m wizardModel) viewIgnoreInstructions(b *strings.Builder, completed, label, pending, cursor lipgloss.Style) {
+func (m wizardModel) viewIgnoreInstructions(b *strings.Builder, completed, label, pending, cursor, hint lipgloss.Style) {
 	if m.ignoreInstructionsSet {
 		val := "No"
 		if m.ignoreInstructions {
@@ -606,15 +597,14 @@ func (m wizardModel) viewIgnoreInstructions(b *strings.Builder, completed, label
 	} else if m.currentStep == stepIgnoreInstructions {
 		b.WriteString(label.Render("  Ignore Agent Instructions"))
 		b.WriteString("\n")
-		options := []string{"Yes - ignore repo instructions", "No - keep repo instructions"}
-		for i, option := range options {
-			if i == m.ignoreInstructionsCursor {
-				b.WriteString(cursor.Render(fmt.Sprintf("    > %s", option)))
-			} else {
-				b.WriteString(fmt.Sprintf("      %s", option))
-			}
-			b.WriteString("\n")
+		check := "[ ]"
+		if m.ignoreInstructions {
+			check = "[x]"
 		}
+		b.WriteString(cursor.Render(fmt.Sprintf("    > %s Ignore agent instructions in target repos", check)))
+		b.WriteString("\n")
+		b.WriteString(hint.Render(fmt.Sprintf("      %s", strings.Join(m.agentInstructions, ", "))))
+		b.WriteString("\n")
 	} else {
 		b.WriteString(pending.Render("  ○ Ignore Agent Instructions"))
 		b.WriteString("\n")
