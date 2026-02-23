@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 
@@ -46,6 +45,7 @@ type ProcessJob struct {
 	BranchStrategy  string
 	SpecifiedBranch string
 	MCPConfigPath   string
+	IgnoreFiles     []string
 	UpdateStatus    func(status string)
 }
 
@@ -149,11 +149,13 @@ func main() {
 			return fetchAndSyncProjects(appConfig.GitHub)
 		},
 		ProcessRepos: func(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult) {
-			processReposWithSender(sender, selectedProjects, setup, *appConfig, par, projects)
+			processReposWithSender(sender, selectedProjects, setup, *appConfig, par)
 		},
 		AssessRepos: func(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult) {
 			assessReposWithSender(sender, selectedProjects, setup, *appConfig, par)
 		},
+		SendSlackNotifications:      slack.SendNotifications,
+		SendSlackAssessmentFindings: slack.SendAssessmentFindings,
 	}
 
 	result, err := input.RunDashboard(dashCfg)
@@ -351,6 +353,12 @@ func processProject(job ProcessJob) ProcessResult {
 		return ProcessResult{Project: project, Success: false, Error: errCancelled}
 	}
 
+	// Remove agent instruction files before running AI tool
+	var removedFiles []string
+	if len(job.IgnoreFiles) > 0 {
+		removedFiles = ai.RemoveInstructionFiles(targetPath, job.IgnoreFiles)
+	}
+
 	// Run AI tool
 	job.UpdateStatus("Running AI agent...")
 	aiOutput, err := ai.VibeCode(ctx, job.AITool, job.VibeCodePrompt, targetPath, job.MCPConfigPath, project.Repo)
@@ -365,6 +373,13 @@ func processProject(job ProcessJob) ProcessResult {
 	if ctx.Err() != nil {
 		cleanup()
 		return ProcessResult{Project: project, Success: false, Error: errCancelled}
+	}
+
+	// Restore agent instruction files before committing
+	if len(removedFiles) > 0 {
+		if restoreErr := ai.RestoreInstructionFiles(ctx, targetPath, removedFiles); restoreErr != nil {
+			log.Printf("⚠️ Failed to restore instruction files for %s: %v", project.Repo, restoreErr)
+		}
 	}
 
 	// Generate PR description
@@ -439,7 +454,7 @@ func processProject(job ProcessJob) ProcessResult {
 	return ProcessResult{Project: project, Success: true, Error: nil, PRURL: prURL, AIOutput: aiOutput}
 }
 
-func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int, allProjects []config.Project) {
+func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
 	filesystem.CreateWorkspace()
 
 	checkpoint := parallelism
@@ -456,6 +471,10 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 			cancel() // no registry; context unused, release immediately
 			ctx = context.Background()
 		}
+		var ignoreFiles []string
+		if setup.IgnoreAgentInstructions {
+			ignoreFiles = appCfg.AgentInstructions
+		}
 		jobs = append(jobs, ProcessJob{
 			Ctx:             ctx,
 			Project:         project,
@@ -466,6 +485,7 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 			BranchStrategy:  setup.BranchStrategy,
 			SpecifiedBranch: setup.BranchName,
 			MCPConfigPath:   sender.MCPConfigPath,
+			IgnoreFiles:     ignoreFiles,
 		})
 	}
 
@@ -536,52 +556,6 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 		}
 	}
 
-	// Send Slack notifications as part of processing
-	if setup.SendSlack {
-		var successfulProjects []config.Project
-		prURLs := make(map[string]string)
-
-		// Build project lookup from the full projects list for metadata (slack_room)
-		projectMap := make(map[string]config.Project)
-		for _, p := range allProjects {
-			projectMap[p.Repo] = p
-		}
-
-		for repo, result := range resultMap {
-			if result.Success {
-				if p, ok := projectMap[repo]; ok {
-					successfulProjects = append(successfulProjects, p)
-					prURLs[repo] = result.PRURL
-				}
-			}
-		}
-
-		if len(successfulProjects) > 0 {
-			// Collect unique channels for the confirmation prompt
-			channelSet := make(map[string]bool)
-			for _, p := range successfulProjects {
-				room := strings.TrimSpace(p.SlackRoom)
-				if room != "" {
-					channelSet[room] = true
-				}
-			}
-			var channels []string
-			for ch := range channelSet {
-				channels = append(channels, ch)
-			}
-			sort.Strings(channels)
-
-			if len(channels) > 0 && sender.SlackConfirmCh != nil {
-				if sender.RequestSlackConfirm(channels) {
-					slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
-				} else {
-					sender.PostStatus("Slack notifications skipped by user.")
-				}
-			} else if len(channels) > 0 {
-				slack.SendNotifications(successfulProjects, setup.PRTitle, prURLs, setup.SlackToken, sender.PostStatus)
-			}
-		}
-	}
 }
 
 // AssessJob represents a single project assessment job.
@@ -591,6 +565,7 @@ type AssessJob struct {
 	AITool       *config.AITool
 	AppConfig    config.Config
 	Prompt       string
+	IgnoreFiles  []string
 	UpdateStatus func(status string)
 }
 
@@ -633,6 +608,11 @@ func assessProject(job AssessJob) AssessResult {
 	if ctx.Err() != nil {
 		cleanup()
 		return AssessResult{Project: project, Error: errCancelled}
+	}
+
+	// Remove agent instruction files before running assessment
+	if len(job.IgnoreFiles) > 0 {
+		ai.RemoveInstructionFiles(targetPath, job.IgnoreFiles)
 	}
 
 	// Assess
@@ -680,12 +660,17 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 			cancel()
 			ctx = context.Background()
 		}
+		var ignoreFiles []string
+		if setup.IgnoreAgentInstructions {
+			ignoreFiles = appCfg.AgentInstructions
+		}
 		jobs = append(jobs, AssessJob{
-			Ctx:       ctx,
-			Project:   project,
-			AITool:    setup.AITool,
-			AppConfig: appCfg,
-			Prompt:    rewrittenPrompt,
+			Ctx:         ctx,
+			Project:     project,
+			AITool:      setup.AITool,
+			AppConfig:   appCfg,
+			Prompt:      rewrittenPrompt,
+			IgnoreFiles: ignoreFiles,
 		})
 	}
 

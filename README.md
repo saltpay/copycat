@@ -103,6 +103,12 @@ github:
   organization: my-org
   auto_discovery_topic: copycat
 
+agent_instructions:
+  - CLAUDE.md
+  - .claude
+  - .cursorrules
+  - .github/copilot-instructions.md
+
 tools:
   - name: claude
     command: claude
@@ -134,6 +140,7 @@ projects:
 
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
+- `agent_instructions` (optional): List of files/directories to remove from cloned repos when "Ignore Agent Instructions" is enabled. Defaults to `CLAUDE.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`. Files are deleted before the AI tool runs and restored via `git checkout` before committing, so they never appear in the PR.
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
@@ -210,9 +217,10 @@ Clones repositories, applies changes using your configured AI coding assistant, 
 1. Select repositories from the list (or type "all")
 2. Choose "Perform Changes Locally"
 3. Enter PR title (you'll be reminded to include a ticket reference if needed)
-5. Enter the AI prompt:
+4. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter
    - **Editor**: Opens your default editor (set via `$EDITOR` env var, defaults to vim)
+5. Optionally enable **Ignore Agent Instructions** to remove repo-level AI instruction files (e.g., `CLAUDE.md`, `.cursorrules`) before the AI runs, so it follows only your prompt
 6. Copycat will:
    - Clone all selected repositories to `repos/` directory
    - Create a timestamped branch (e.g., `copycat-20231015-150405`)

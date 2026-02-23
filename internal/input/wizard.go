@@ -2,7 +2,6 @@ package input
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -23,26 +22,25 @@ type wizardStep int
 
 const (
 	stepAction wizardStep = iota
-	// Local changes path
 	stepAITool
+	// Local changes path
 	stepBranchStrategy
 	stepBranchName
 	stepPRTitle
+	// Shared
 	stepPrompt
-	stepSlackNotify
-	stepSlackToken
+	stepIgnoreInstructions
 )
 
 // WizardResult holds all values collected by the setup wizard.
 type WizardResult struct {
-	Action         string // "local" or "assessment"
-	AITool         *config.AITool
-	BranchStrategy string
-	BranchName     string
-	PRTitle        string
-	Prompt         string
-	SendSlack      bool
-	SlackToken     string
+	Action                  string // "local" or "assessment"
+	AITool                  *config.AITool
+	IgnoreAgentInstructions bool
+	BranchStrategy          string
+	BranchName              string
+	PRTitle                 string
+	Prompt                  string
 }
 
 type wizardModel struct {
@@ -59,6 +57,12 @@ type wizardModel struct {
 	aiToolCursor int
 	aiTool       *config.AITool
 	skipAITool   bool
+
+	// Ignore agent instructions
+	agentInstructions      []string
+	ignoreInstructions     bool
+	ignoreInstructionsSet  bool
+	skipIgnoreInstructions bool
 
 	// Branch strategy
 	branchOptions  []string
@@ -79,19 +83,11 @@ type wizardModel struct {
 	prompt      string
 	useEditor   bool
 
-	// Slack
-	slackNotifyOptions []string
-	slackNotifyCursor  int
-	sendSlack          bool
-	slackTokenInput    textinput.Model
-	slackToken         string
-	slackDecided       bool // true once user picked yes/no
-
 	// State
 	termWidth int
 }
 
-func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []config.Project) wizardModel {
+func newWizardModel(aiToolsConfig *config.AIToolsConfig, agentInstructions []string, selectedProjects []config.Project) wizardModel {
 	branchInput := textinput.New()
 	branchInput.Placeholder = "my-branch-name"
 	branchInput.CharLimit = 256
@@ -107,14 +103,6 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []conf
 	promptInput.CharLimit = 2048
 	promptInput.Width = 60
 
-	slackTokenInput := textinput.New()
-	slackTokenInput.Placeholder = "xoxb-..."
-	slackTokenInput.CharLimit = 512
-	slackTokenInput.Width = 60
-	if envToken := os.Getenv("SLACK_BOT_TOKEN"); envToken != "" {
-		slackTokenInput.SetValue(envToken)
-	}
-
 	m := wizardModel{
 		selectedProjects: selectedProjects,
 		actionOptions: []string{
@@ -128,11 +116,9 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []conf
 			"Specify branch name (reuse if exists)",
 			"Specify branch name (skip if exists)",
 		},
-		branchNameInput:    branchInput,
-		prTitleInput:       prTitleInput,
-		promptInput:        promptInput,
-		slackNotifyOptions: []string{"Yes", "No"},
-		slackTokenInput:    slackTokenInput,
+		branchNameInput: branchInput,
+		prTitleInput:    prTitleInput,
+		promptInput:     promptInput,
 	}
 
 	if len(aiToolsConfig.Tools) <= 1 {
@@ -147,6 +133,12 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, selectedProjects []conf
 				break
 			}
 		}
+	}
+
+	if len(agentInstructions) == 0 {
+		m.skipIgnoreInstructions = true
+	} else {
+		m.agentInstructions = agentInstructions
 	}
 
 	return m
@@ -172,6 +164,8 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateActionStep(msg)
 	case stepAITool:
 		return m.updateAIToolStep(msg)
+	case stepIgnoreInstructions:
+		return m.updateIgnoreInstructionsStep(msg)
 	case stepBranchStrategy:
 		return m.updateBranchStrategyStep(msg)
 	case stepBranchName:
@@ -180,10 +174,6 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePRTitleStep(msg)
 	case stepPrompt:
 		return m.updatePromptStep(msg)
-	case stepSlackNotify:
-		return m.updateSlackNotifyStep(msg)
-	case stepSlackToken:
-		return m.updateSlackTokenStep(msg)
 	}
 
 	return m, nil
@@ -253,6 +243,23 @@ func (m wizardModel) updateAIToolStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 		}
 		m.currentStep = stepBranchStrategy
+	}
+	return m, nil
+}
+
+func (m wizardModel) updateIgnoreInstructionsStep(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch keyMsg.String() {
+	case "q":
+		return m, tea.Quit
+	case " ":
+		m.ignoreInstructions = !m.ignoreInstructions
+	case "enter":
+		m.ignoreInstructionsSet = true
+		return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
 	}
 	return m, nil
 }
@@ -345,11 +352,11 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.prompt = value
 			m.promptInput.Blur()
-			if m.action == "assessment" {
-				return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
+			if !m.skipIgnoreInstructions {
+				m.currentStep = stepIgnoreInstructions
+				return m, nil
 			}
-			m.currentStep = stepSlackNotify
-			return m, nil
+			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
 		case tea.KeyEsc:
 			return m, tea.Quit
 		}
@@ -359,56 +366,6 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.promptInput, cmd = m.promptInput.Update(msg)
-	return m, cmd
-}
-
-func (m wizardModel) updateSlackNotifyStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return m, nil
-	}
-	switch keyMsg.String() {
-	case "q":
-		return m, tea.Quit
-	case "up", "k":
-		if m.slackNotifyCursor > 0 {
-			m.slackNotifyCursor--
-		}
-	case "down", "j":
-		if m.slackNotifyCursor < len(m.slackNotifyOptions)-1 {
-			m.slackNotifyCursor++
-		}
-	case "enter", " ":
-		m.slackDecided = true
-		if m.slackNotifyCursor == 0 {
-			m.sendSlack = true
-			m.slackTokenInput.Focus()
-			m.currentStep = stepSlackToken
-			return m, textinput.Blink
-		}
-		// No → done
-		return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-	}
-	return m, nil
-}
-
-func (m wizardModel) updateSlackTokenStep(msg tea.Msg) (tea.Model, tea.Cmd) {
-	keyMsg, ok := msg.(tea.KeyMsg)
-	if ok {
-		switch keyMsg.Type {
-		case tea.KeyEnter:
-			value := strings.TrimSpace(m.slackTokenInput.Value())
-			if value == "" {
-				return m, nil
-			}
-			m.slackToken = value
-			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
-		case tea.KeyEsc:
-			return m, tea.Quit
-		}
-	}
-	var cmd tea.Cmd
-	m.slackTokenInput, cmd = m.slackTokenInput.Update(msg)
 	return m, cmd
 }
 
@@ -467,12 +424,14 @@ func (m wizardModel) View() string {
 	// Help text
 	b.WriteString("\n")
 	switch m.currentStep {
-	case stepAITool, stepBranchStrategy, stepSlackNotify:
+	case stepAITool, stepBranchStrategy:
 		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
-	case stepBranchName, stepPRTitle, stepSlackToken:
+	case stepBranchName, stepPRTitle:
 		b.WriteString(helpStyle.Render("  enter: submit • esc/ctrl+c: quit"))
 	case stepPrompt:
 		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc/ctrl+c: quit"))
+	case stepIgnoreInstructions:
+		b.WriteString(helpStyle.Render("  space: toggle • enter: confirm • q/ctrl+c: quit"))
 	}
 	b.WriteString("\n")
 
@@ -573,44 +532,9 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 		b.WriteString("\n")
 	}
 
-	// Slack Notify
-	if m.slackDecided {
-		if m.sendSlack {
-			b.WriteString(completed.Render("  ✓ Slack Notifications: Yes"))
-			b.WriteString("\n")
-		} else {
-			b.WriteString(completed.Render("  ✓ Slack Notifications: No"))
-			b.WriteString("\n")
-		}
-	} else if m.currentStep == stepSlackNotify {
-		b.WriteString(label.Render("  Send Slack Notifications?"))
-		b.WriteString("\n")
-		for i, option := range m.slackNotifyOptions {
-			if i == m.slackNotifyCursor {
-				b.WriteString(cursor.Render(fmt.Sprintf("    > %s", option)))
-			} else {
-				b.WriteString(fmt.Sprintf("      %s", option))
-			}
-			b.WriteString("\n")
-		}
-	} else {
-		b.WriteString(pending.Render("  ○ Slack Notifications"))
-		b.WriteString("\n")
-	}
-
-	// Slack Token (conditional)
-	if m.sendSlack {
-		if m.slackToken != "" {
-			b.WriteString(completed.Render("  ✓ Slack Token: ****"))
-			b.WriteString("\n")
-		} else if m.currentStep == stepSlackToken {
-			b.WriteString(label.Render("  Slack Bot Token"))
-			b.WriteString("\n")
-			b.WriteString(hint.Render("    Pre-filled from $SLACK_BOT_TOKEN if set"))
-			b.WriteString("\n")
-			b.WriteString(fmt.Sprintf("    %s", m.slackTokenInput.View()))
-			b.WriteString("\n")
-		}
+	// Ignore Agent Instructions (after prompt)
+	if !m.skipIgnoreInstructions {
+		m.viewIgnoreInstructions(b, completed, label, pending, cursor, hint)
 	}
 }
 
@@ -655,6 +579,36 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 		b.WriteString(pending.Render("  ○ Assessment Question"))
 		b.WriteString("\n")
 	}
+
+	// Ignore Agent Instructions (after prompt)
+	if !m.skipIgnoreInstructions {
+		m.viewIgnoreInstructions(b, completed, label, pending, cursor, hint)
+	}
+}
+
+func (m wizardModel) viewIgnoreInstructions(b *strings.Builder, completed, label, pending, cursor, hint lipgloss.Style) {
+	if m.ignoreInstructionsSet {
+		val := "No"
+		if m.ignoreInstructions {
+			val = "Yes"
+		}
+		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Ignore Agent Instructions: %s", val)))
+		b.WriteString("\n")
+	} else if m.currentStep == stepIgnoreInstructions {
+		b.WriteString(label.Render("  Ignore Agent Instructions"))
+		b.WriteString("\n")
+		check := "[ ]"
+		if m.ignoreInstructions {
+			check = "[x]"
+		}
+		b.WriteString(cursor.Render(fmt.Sprintf("    > %s Ignore agent instructions in target repos", check)))
+		b.WriteString("\n")
+		b.WriteString(hint.Render(fmt.Sprintf("      %s", strings.Join(m.agentInstructions, ", "))))
+		b.WriteString("\n")
+	} else {
+		b.WriteString(pending.Render("  ○ Ignore Agent Instructions"))
+		b.WriteString("\n")
+	}
 }
 
 func formatProjectsSummary(projects []config.Project) string {
@@ -673,13 +627,12 @@ func formatProjectsSummary(projects []config.Project) string {
 
 func (m wizardModel) buildResult() WizardResult {
 	return WizardResult{
-		Action:         m.action,
-		AITool:         m.aiTool,
-		BranchStrategy: m.branchStrategy,
-		BranchName:     m.branchName,
-		PRTitle:        m.prTitle,
-		Prompt:         m.prompt,
-		SendSlack:      m.sendSlack,
-		SlackToken:     m.slackToken,
+		Action:                  m.action,
+		AITool:                  m.aiTool,
+		IgnoreAgentInstructions: m.ignoreInstructions,
+		BranchStrategy:          m.branchStrategy,
+		BranchName:              m.branchName,
+		PRTitle:                 m.prTitle,
+		Prompt:                  m.prompt,
 	}
 }
