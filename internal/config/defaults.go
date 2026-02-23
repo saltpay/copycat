@@ -8,6 +8,12 @@ const ConfigTemplate = `github:
   organization: %s
   auto_discovery_topic: copycat
 
+agent_instructions:
+  - CLAUDE.md
+  - .claude
+  - .cursorrules
+  - .github/copilot-instructions.md
+
 tools:
   - name: claude
     command: claude
@@ -71,6 +77,12 @@ func DefaultConfig(org string) *Config {
 		GitHub: GitHubConfig{
 			Organization:       org,
 			AutoDiscoveryTopic: "copycat",
+		},
+		AgentInstructions: []string{
+			"CLAUDE.md",
+			".claude",
+			".cursorrules",
+			".github/copilot-instructions.md",
 		},
 		AIToolsConfig: AIToolsConfig{
 			Tools: []AITool{

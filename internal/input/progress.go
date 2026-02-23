@@ -17,6 +17,7 @@ const maxVisibleProjects = 10
 const maxPermissionCmdLines = 8
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+var spinnerColors = []string{"205", "213", "141", "111", "75", "33", "40", "48", "214", "208"}
 
 // CancelRegistry is a thread-safe map of repo -> context.CancelFunc.
 type CancelRegistry struct {
@@ -74,21 +75,10 @@ type AssessmentResultMsg struct {
 	Findings map[string]string
 }
 
-// slackConfirmMsg asks the user to confirm sending Slack notifications.
-type slackConfirmMsg struct {
-	Channels []string
-}
-
-// slackConfirmResponseMsg carries the user's response to the Slack confirmation.
-type slackConfirmResponseMsg struct {
-	Approved bool
-}
-
 // StatusSender sends status updates to the progress dashboard.
 type StatusSender struct {
 	send           func(tea.Msg)
 	ResumeCh       chan struct{}
-	SlackConfirmCh chan bool
 	MCPConfigPath  string
 	CancelRegistry *CancelRegistry
 }
@@ -121,13 +111,6 @@ func (s *StatusSender) AssessmentResult(summary string, findings map[string]stri
 	s.send(AssessmentResultMsg{Summary: summary, Findings: findings})
 }
 
-// RequestSlackConfirm asks the user to confirm Slack notifications and blocks until answered.
-// Returns true if the user approved.
-func (s *StatusSender) RequestSlackConfirm(channels []string) bool {
-	s.send(slackConfirmMsg{Channels: channels})
-	return <-s.SlackConfirmCh
-}
-
 // Finish signals that all processing (including post-processing) is done.
 func (s *StatusSender) Finish() {
 	s.send(processingDoneMsg{})
@@ -148,11 +131,6 @@ type progressModel struct {
 	paused             bool
 	checkpointInterval int
 	nextCheckpoint     int
-
-	// Slack confirmation
-	slackConfirmPending  bool
-	slackConfirmChannels []string
-	slackConfirmCursor   int // 0=Yes, 1=No
 
 	// Spinner animation
 	tickCount int
@@ -239,10 +217,6 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case PostStatusMsg:
 		m.postLines = append(m.postLines, msg.Line)
-	case slackConfirmMsg:
-		m.slackConfirmPending = true
-		m.slackConfirmChannels = msg.Channels
-		m.slackConfirmCursor = 0
 	case permission.PermissionRequestMsg:
 		return m.handlePermissionRequest(msg.Request)
 	case tickMsg:
@@ -252,10 +226,6 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Permission input takes priority
 		if m.currentPermission != nil {
 			return m.handlePermissionKey(msg)
-		}
-		// Slack confirmation
-		if m.slackConfirmPending {
-			return m.handleSlackConfirmKey(msg)
 		}
 		if m.paused && msg.String() == "enter" {
 			m.paused = false
@@ -521,33 +491,6 @@ func (m progressModel) advancePermissionQueue() progressModel {
 	return m
 }
 
-func (m progressModel) handleSlackConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "left", "h":
-		if m.slackConfirmCursor > 0 {
-			m.slackConfirmCursor--
-		}
-	case "right", "l":
-		if m.slackConfirmCursor < 1 {
-			m.slackConfirmCursor++
-		}
-	case "y":
-		m.slackConfirmPending = false
-		return m, func() tea.Msg { return slackConfirmResponseMsg{Approved: true} }
-	case "n":
-		m.slackConfirmPending = false
-		return m, func() tea.Msg { return slackConfirmResponseMsg{Approved: false} }
-	case "enter":
-		m.slackConfirmPending = false
-		approved := m.slackConfirmCursor == 0
-		return m, func() tea.Msg { return slackConfirmResponseMsg{Approved: approved} }
-	case "ctrl+c":
-		m.quitted = true
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
 func (m progressModel) drainAutoApproved() progressModel {
 	var remaining []permission.PermissionRequest
 	for _, req := range m.permissionQueue {
@@ -718,35 +661,6 @@ func (m progressModel) View() string {
 		b.WriteString("\n\n")
 	}
 
-	// Slack confirmation prompt
-	if m.slackConfirmPending {
-		slackStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-		b.WriteString(slackStyle.Render("📨  Send Slack notifications to the following channels?"))
-		b.WriteString("\n")
-		channelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-		for _, ch := range m.slackConfirmChannels {
-			b.WriteString(channelStyle.Render(fmt.Sprintf("    • #%s", ch)))
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-
-		selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-		normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-		options := []string{"Yes (y)", "No (n)"}
-		b.WriteString("  ")
-		for i, opt := range options {
-			if i == m.slackConfirmCursor {
-				b.WriteString(selectedStyle.Render("> " + opt))
-			} else {
-				b.WriteString(normalStyle.Render("  " + opt))
-			}
-			if i < len(options)-1 {
-				b.WriteString("    ")
-			}
-		}
-		b.WriteString("\n\n")
-	}
-
 	// Per-project status lines (sorted by status, with scrolling)
 	sorted := m.sortedRepos()
 	start, end := m.visibleWindow(sorted)
@@ -758,7 +672,8 @@ func (m progressModel) View() string {
 	}
 
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
+	spinnerColor := spinnerColors[m.tickCount%len(spinnerColors)]
+	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(spinnerColor))
 	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
 	for _, repo := range sorted[start:end] {
@@ -785,7 +700,12 @@ func (m progressModel) View() string {
 	if len(m.postLines) > 0 {
 		b.WriteString("\n")
 		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		for _, line := range m.postLines {
+		for i, line := range m.postLines {
+			isLast := i == len(m.postLines)-1
+			// Show spinner on the last line if it looks like an in-progress step
+			if isLast && !strings.HasPrefix(line, "✓") && !strings.HasPrefix(line, "⚠") {
+				b.WriteString(spinnerStyle.Render(frame) + " ")
+			}
 			b.WriteString(dimStyle.Render(line))
 			b.WriteString("\n")
 		}
