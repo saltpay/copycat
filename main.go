@@ -354,9 +354,9 @@ func processProject(job ProcessJob) ProcessResult {
 	}
 
 	// Remove agent instruction files before running AI tool
-	var removedFiles []string
+	var removedFiles []ai.RemovedFile
 	if len(job.IgnoreFiles) > 0 {
-		removedFiles = ai.RemoveInstructionFiles(targetPath, job.IgnoreFiles)
+		removedFiles = ai.RemoveInstructionFiles(ctx, targetPath, job.IgnoreFiles)
 	}
 
 	// Run AI tool
@@ -617,7 +617,7 @@ func assessProject(job AssessJob) AssessResult {
 
 	// Remove agent instruction files before running assessment
 	if len(job.IgnoreFiles) > 0 {
-		ai.RemoveInstructionFiles(targetPath, job.IgnoreFiles)
+		ai.RemoveInstructionFiles(ctx, targetPath, job.IgnoreFiles)
 	}
 
 	// Assess
