@@ -552,7 +552,12 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 
 		// Wait for user confirmation before starting next batch
 		if batchEnd < len(jobs) && sender.ResumeCh != nil {
-			<-sender.ResumeCh
+			newPrompt := <-sender.ResumeCh
+			if newPrompt != "" {
+				for i := batchEnd; i < len(jobs); i++ {
+					jobs[i].VibeCodePrompt = newPrompt
+				}
+			}
 		}
 	}
 
@@ -731,7 +736,12 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 		wg.Wait()
 
 		if batchEnd < len(jobs) && sender.ResumeCh != nil {
-			<-sender.ResumeCh
+			newPrompt := <-sender.ResumeCh
+			if newPrompt != "" {
+				for i := batchEnd; i < len(jobs); i++ {
+					jobs[i].Prompt = newPrompt
+				}
+			}
 		}
 	}
 

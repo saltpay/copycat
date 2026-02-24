@@ -100,7 +100,7 @@ type dashboardModel struct {
 	progress progressModel
 
 	// Processing control
-	resumeCh       chan struct{}
+	resumeCh       chan string
 	cancelRegistry *CancelRegistry
 
 	// Permission server
@@ -251,6 +251,10 @@ func (m dashboardModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.wizard.prompt = msg.Content
 		m.wizard.promptInput.Blur()
+		if !m.wizard.skipIgnoreInstructions {
+			m.wizard.currentStep = stepIgnoreInstructions
+			return m, nil
+		}
 		result := m.wizard.buildResult()
 		m.wizardResult = &result
 		return m.startProcessing()
@@ -306,7 +310,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 	}
 
 	if checkpointInterval > 0 {
-		m.resumeCh = make(chan struct{}, 1)
+		m.resumeCh = make(chan string, 1)
 	}
 
 	m.cancelRegistry = &CancelRegistry{}
@@ -376,7 +380,7 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case resumeProcessingMsg:
 		if m.resumeCh != nil {
-			m.resumeCh <- struct{}{}
+			m.resumeCh <- msg.NewPrompt
 		}
 		return m, nil
 	case cancelProjectMsg:
