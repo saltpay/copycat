@@ -2,11 +2,15 @@
 
 Welcome to Copycat, a way to copy changes from one git repository to another.
 
-<img src="./copycat-logo.png"
+<img src="./logo.png"
      alt="Copycat logo"
      style="margin-bottom: 10px; animation: spin 2s linear infinite; transform-origin: center center;" />
 
 Copycat is an automation tool that enables you to apply consistent changes across multiple GitHub repositories using AI coding assistants. It streamlines the process of creating issues or performing code changes at scale with support for multiple AI tools including Claude, Codex, Qwen, and others.
+
+## Demo
+
+![Copycat Demo](./demo.gif)
 
 ## Installation
 
@@ -112,8 +116,18 @@ agent_instructions:
 tools:
   - name: claude
     command: claude
-    code_args: [--print, --permission-mode, acceptEdits]
-    summary_args: [--print]
+    code_args: [--print, --permission-mode, acceptEdits, --setting-sources, user]
+    summary_args: [--print, --setting-sources, user]
+    allowed_tools:
+      - Edit
+      - "List(*)"
+      - "Read(*)"
+      - "Bash(tree:*)"
+      - "Bash(grep:*)"
+    disallowed_tools:
+      - WebFetch
+      - Task
+    supports_permission_prompt: true
   - name: codex
     command: codex
     code_args: [exec, --full-auto]
@@ -146,6 +160,9 @@ projects:
   - `command`: CLI command to execute
   - `code_args`: Arguments passed when making code changes
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
+  - `allowed_tools` (optional, Claude-specific): Allowlist of tools the AI can use
+  - `disallowed_tools` (optional, Claude-specific): Blocklist of tools
+  - `supports_permission_prompt` (optional, Claude-specific): Enable interactive permission prompting for non-allowlisted commands
 
 **`projects.yaml`:**
 
@@ -154,6 +171,8 @@ projects:
   - `slack_room`: Slack channel for notifications (optional)
 
 When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for full details on the security model, permission prompting architecture, and allowlist customization.
 
 ## Usage
 
@@ -232,11 +251,13 @@ Clones repositories, applies changes using your configured AI coding assistant, 
 
 ### Project Selection
 
-When prompted for project numbers:
-- Enter specific numbers: `1,3,5`
-- Enter a range: `1,2,3,4`
-- Select all projects: `all`
-- Skip selection: press Enter
+The project selector is an interactive multi-select TUI:
+- **Navigate**: Arrow keys or `h/j/k/l`
+- **Toggle selection**: `Space`
+- **Select/deselect all**: `a`
+- **Filter by topic**: `f`, then type to filter
+- **Refresh from GitHub**: `r`
+- **Confirm**: `Enter`
 
 ### Branch Naming
 
@@ -309,11 +330,11 @@ Uses the PR title you provide. You may include a ticket or issue reference direc
 2. **Use clear, specific prompts** for your AI tool
 3. **Review changes** before merging PRs
 4. **Use the editor option** for complex multi-line prompts
-6. **Configure AI tool arguments properly** in `config.yaml` for optimal results
+5. **Configure AI tool arguments properly** in `config.yaml` for optimal results
 
 ## Examples
 
-### Example Claude Prompts
+### Example AI Prompts
 
 **Add a new dependency:**
 ```
@@ -332,37 +353,7 @@ Rename all instances of the function 'processData' to 'transformData' across the
 
 ## Contributing
 
-### Running Locally
-
-```bash
-go run main.go                 # Run the interactive TUI
-go run main.go edit config     # Open config.yaml in $EDITOR
-go run main.go edit projects   # Open projects.yaml in $EDITOR
-go run main.go reset           # Delete configuration files and start fresh
-```
-
-### Commit Messages
-
-This project uses [Conventional Commits](https://www.conventionalcommits.org/) and [Semantic Versioning](https://semver.org/). Releases are automatically created when commits are merged to `main`.
-
-**Release-triggering prefixes:**
-
-| Prefix   | Version Bump  |
-|----------|---------------|
-| `feat:`  | Minor (0.X.0) |
-| `fix:`   | Patch (0.0.X) |
-
-**Breaking changes:** Add `!` after the prefix (e.g., `feat!:`, `fix!:`) or include `BREAKING CHANGE:` in the commit body to trigger a major version bump (X.0.0).
-
-**Non-release prefixes:** `docs:`, `chore:`, `refactor:`, `test:`, `ci:` — these follow conventional commits style but won't trigger a release.
-
-**Examples:**
-```bash
-git commit -m "feat: add support for GitLab repositories"
-git commit -m "fix: handle empty repository list gracefully"
-git commit -m "docs: update configuration examples"
-git commit -m "feat!: change config file format"
-```
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, architecture overview, code style, commit conventions, and security details.
 
 ## Security Notes
 
