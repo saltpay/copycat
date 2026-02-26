@@ -34,6 +34,8 @@ const (
 	notifPhaseDone                          // results displayed
 )
 
+const notifMaxVisibleRepos = 15
+
 // notifFocus tracks which element has focus on the notifications tab
 type notifFocus int
 
@@ -100,7 +102,7 @@ type dashboardModel struct {
 	progress progressModel
 
 	// Processing control
-	resumeCh       chan struct{}
+	resumeCh       chan string
 	cancelRegistry *CancelRegistry
 
 	// Permission server
@@ -130,15 +132,16 @@ type dashboardModel struct {
 	summaryScrollOffset int    // scroll offset within the expanded summary box
 
 	// Tabbed done screen
-	activeTab       int            // current tab index
-	notifPhase      notifPhaseType // notification tab phase
-	notifFocus      notifFocus     // which element has focus
-	slackTokenInput textinput.Model
-	slackToken      string
-	slackRepos      []string        // repos eligible for Slack (successful + has slack room)
-	slackSelected   map[string]bool // toggled repos (true = will send)
-	slackCursor     int             // cursor index into slackRepos
-	slackResults    []string
+	activeTab         int            // current tab index
+	notifPhase        notifPhaseType // notification tab phase
+	notifFocus        notifFocus     // which element has focus
+	slackTokenInput   textinput.Model
+	slackToken        string
+	slackRepos        []string        // repos eligible for Slack (successful + has slack room)
+	slackSelected     map[string]bool // toggled repos (true = will send)
+	slackCursor       int             // cursor index into slackRepos
+	notifScrollOffset int             // scroll offset for repo list
+	slackResults      []string
 }
 
 func newDashboardModel(cfg DashboardConfig) dashboardModel {
@@ -251,6 +254,10 @@ func (m dashboardModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.wizard.prompt = msg.Content
 		m.wizard.promptInput.Blur()
+		if !m.wizard.skipIgnoreInstructions {
+			m.wizard.currentStep = stepIgnoreInstructions
+			return m, nil
+		}
 		result := m.wizard.buildResult()
 		m.wizardResult = &result
 		return m.startProcessing()
@@ -306,7 +313,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 	}
 
 	if checkpointInterval > 0 {
-		m.resumeCh = make(chan struct{}, 1)
+		m.resumeCh = make(chan string, 1)
 	}
 
 	m.cancelRegistry = &CancelRegistry{}
@@ -376,7 +383,7 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case resumeProcessingMsg:
 		if m.resumeCh != nil {
-			m.resumeCh <- struct{}{}
+			m.resumeCh <- msg.NewPrompt
 		}
 		return m, nil
 	case cancelProjectMsg:
@@ -777,6 +784,7 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 					m.slackSelected[repo] = !allSelected
 				}
 			}
+			m.ensureNotifCursorVisible()
 			return m, nil
 
 		case notifFocusSend:
@@ -1551,6 +1559,33 @@ func (m dashboardModel) renderAssessProjectsTabContent() string {
 	return b.String()
 }
 
+// ensureNotifCursorVisible adjusts notifScrollOffset so the cursor is within the visible window.
+func (m *dashboardModel) ensureNotifCursorVisible() {
+	n := len(m.slackRepos)
+	if n == 0 {
+		m.notifScrollOffset = 0
+		return
+	}
+
+	if m.slackCursor < m.notifScrollOffset {
+		m.notifScrollOffset = m.slackCursor
+	}
+	if m.slackCursor >= m.notifScrollOffset+notifMaxVisibleRepos {
+		m.notifScrollOffset = m.slackCursor - notifMaxVisibleRepos + 1
+	}
+
+	maxOffset := n - notifMaxVisibleRepos
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.notifScrollOffset > maxOffset {
+		m.notifScrollOffset = maxOffset
+	}
+	if m.notifScrollOffset < 0 {
+		m.notifScrollOffset = 0
+	}
+}
+
 func (m dashboardModel) renderNotifTabContent() string {
 	var b strings.Builder
 
@@ -1595,7 +1630,21 @@ func (m dashboardModel) renderNotifTabContent() string {
 			}
 		}
 
-		for i, repo := range m.slackRepos {
+		numRepos := len(m.slackRepos)
+		visibleRows := numRepos
+		if visibleRows > notifMaxVisibleRepos {
+			visibleRows = notifMaxVisibleRepos
+		}
+		scrollEnd := m.notifScrollOffset + visibleRows
+
+		// Scroll-up indicator
+		if m.notifScrollOffset > 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("    ↑ %d more above", m.notifScrollOffset)))
+			b.WriteString("\n")
+		}
+
+		for i := m.notifScrollOffset; i < scrollEnd && i < numRepos; i++ {
+			repo := m.slackRepos[i]
 			isCursor := m.notifFocus == notifFocusRepos && i == m.slackCursor
 			isSelected := m.slackSelected[repo]
 
@@ -1611,6 +1660,13 @@ func (m dashboardModel) renderNotifTabContent() string {
 
 			channel := repoChannel[repo]
 			b.WriteString(fmt.Sprintf("  %s%s %s %s\n", prefix, check, repoStyle.Render(repo), channelStyle.Render("#"+channel)))
+		}
+
+		// Scroll-down indicator
+		reposBelow := numRepos - scrollEnd
+		if reposBelow > 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("    ↓ %d more below", reposBelow)))
+			b.WriteString("\n")
 		}
 
 		// Send button

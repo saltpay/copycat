@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/saltpay/copycat/internal/permission"
@@ -40,7 +41,10 @@ func (r *CancelRegistry) Cancel(repo string) {
 type processingDoneMsg struct{}
 
 // resumeProcessingMsg signals that the user has confirmed to continue processing.
-type resumeProcessingMsg struct{}
+// NewPrompt is non-empty if the user edited the prompt during the pause.
+type resumeProcessingMsg struct {
+	NewPrompt string
+}
 
 // cancelProjectMsg requests cancellation of a single project.
 type cancelProjectMsg struct {
@@ -78,7 +82,7 @@ type AssessmentResultMsg struct {
 // StatusSender sends status updates to the progress dashboard.
 type StatusSender struct {
 	send           func(tea.Msg)
-	ResumeCh       chan struct{}
+	ResumeCh       chan string
 	MCPConfigPath  string
 	CancelRegistry *CancelRegistry
 }
@@ -129,6 +133,8 @@ type progressModel struct {
 	postLines []string
 
 	paused             bool
+	pauseEditing       bool
+	pausePromptInput   textinput.Model
 	checkpointInterval int
 	nextCheckpoint     int
 
@@ -158,6 +164,7 @@ type progressModel struct {
 	branchName     string
 	prTitle        string
 	prompt         string
+	originalPrompt string
 	promptExpanded bool
 	cursorOnPrompt bool
 }
@@ -187,6 +194,7 @@ func NewProgressModel(repos []string, checkpointInterval int, branchName, prTitl
 		branchName:         branchName,
 		prTitle:            prTitle,
 		prompt:             prompt,
+		originalPrompt:     prompt,
 	}
 }
 
@@ -227,10 +235,45 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentPermission != nil {
 			return m.handlePermissionKey(msg)
 		}
-		if m.paused && msg.String() == "enter" {
-			m.paused = false
-			m.nextCheckpoint += m.checkpointInterval
-			return m, func() tea.Msg { return resumeProcessingMsg{} }
+		if m.paused {
+			if m.pauseEditing {
+				switch msg.Type {
+				case tea.KeyEnter:
+					value := strings.TrimSpace(m.pausePromptInput.Value())
+					if value != "" {
+						m.prompt = value
+					}
+					m.pauseEditing = false
+					m.pausePromptInput.Blur()
+					return m, nil
+				case tea.KeyEsc:
+					m.pauseEditing = false
+					m.pausePromptInput.Blur()
+					return m, nil
+				}
+				var cmd tea.Cmd
+				m.pausePromptInput, cmd = m.pausePromptInput.Update(msg)
+				return m, cmd
+			}
+			switch msg.String() {
+			case "e":
+				m.pauseEditing = true
+				m.pausePromptInput = textinput.New()
+				m.pausePromptInput.Placeholder = "Enter new prompt (leave empty to keep current)"
+				m.pausePromptInput.CharLimit = 2048
+				m.pausePromptInput.Width = 60
+				m.pausePromptInput.Focus()
+				return m, textinput.Blink
+			case "enter":
+				newPrompt := ""
+				if m.prompt != m.originalPrompt {
+					newPrompt = m.prompt
+				}
+				m.paused = false
+				m.nextCheckpoint += m.checkpointInterval
+				return m, func() tea.Msg { return resumeProcessingMsg{NewPrompt: newPrompt} }
+			}
+			return m, nil
 		}
 		switch msg.String() {
 		case "ctrl+c":
@@ -657,8 +700,24 @@ func (m progressModel) View() string {
 		hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 		b.WriteString(hintStyle.Render("  💰 Please verify you have sufficient AI credits before continuing with the next batch."))
 		b.WriteString("\n")
-		b.WriteString(hintStyle.Render("  Press Enter to continue or Ctrl+C to stop."))
-		b.WriteString("\n\n")
+		if m.pauseEditing {
+			editLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+			b.WriteString(editLabel.Render("  New Prompt"))
+			b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("    %s", m.pausePromptInput.View()))
+			b.WriteString("\n")
+			b.WriteString(hintStyle.Render("  enter: apply • esc: cancel"))
+			b.WriteString("\n")
+		} else {
+			if m.prompt != m.originalPrompt {
+				editedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("40"))
+				b.WriteString(editedStyle.Render("  ✓ Prompt updated for next batch"))
+				b.WriteString("\n")
+			}
+			b.WriteString(hintStyle.Render("  Press Enter to continue • e: edit prompt • Ctrl+C to stop."))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
 	}
 
 	// Per-project status lines (sorted by status, with scrolling)

@@ -354,9 +354,9 @@ func processProject(job ProcessJob) ProcessResult {
 	}
 
 	// Remove agent instruction files before running AI tool
-	var removedFiles []string
+	var removedFiles []ai.RemovedFile
 	if len(job.IgnoreFiles) > 0 {
-		removedFiles = ai.RemoveInstructionFiles(targetPath, job.IgnoreFiles)
+		removedFiles = ai.RemoveInstructionFiles(ctx, targetPath, job.IgnoreFiles)
 	}
 
 	// Run AI tool
@@ -552,7 +552,12 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 
 		// Wait for user confirmation before starting next batch
 		if batchEnd < len(jobs) && sender.ResumeCh != nil {
-			<-sender.ResumeCh
+			newPrompt := <-sender.ResumeCh
+			if newPrompt != "" {
+				for i := batchEnd; i < len(jobs); i++ {
+					jobs[i].VibeCodePrompt = newPrompt
+				}
+			}
 		}
 	}
 
@@ -612,7 +617,7 @@ func assessProject(job AssessJob) AssessResult {
 
 	// Remove agent instruction files before running assessment
 	if len(job.IgnoreFiles) > 0 {
-		ai.RemoveInstructionFiles(targetPath, job.IgnoreFiles)
+		ai.RemoveInstructionFiles(ctx, targetPath, job.IgnoreFiles)
 	}
 
 	// Assess
@@ -731,7 +736,12 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 		wg.Wait()
 
 		if batchEnd < len(jobs) && sender.ResumeCh != nil {
-			<-sender.ResumeCh
+			newPrompt := <-sender.ResumeCh
+			if newPrompt != "" {
+				for i := batchEnd; i < len(jobs); i++ {
+					jobs[i].Prompt = newPrompt
+				}
+			}
 		}
 	}
 
