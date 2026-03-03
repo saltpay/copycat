@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/util"
+	"github.com/saltpay/copycat/v2/internal/config"
+	"github.com/saltpay/copycat/v2/internal/util"
 )
 
 // ErrBranchExists is returned when a branch already exists and the skip strategy is used.

@@ -11,14 +11,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/saltpay/copycat/internal/ai"
-	"github.com/saltpay/copycat/internal/cmd"
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/filesystem"
-	"github.com/saltpay/copycat/internal/git"
-	"github.com/saltpay/copycat/internal/input"
-	"github.com/saltpay/copycat/internal/permission"
-	"github.com/saltpay/copycat/internal/slack"
+	"github.com/saltpay/copycat/v2/internal/ai"
+	"github.com/saltpay/copycat/v2/internal/cmd"
+	"github.com/saltpay/copycat/v2/internal/config"
+	"github.com/saltpay/copycat/v2/internal/filesystem"
+	"github.com/saltpay/copycat/v2/internal/git"
+	"github.com/saltpay/copycat/v2/internal/input"
+	"github.com/saltpay/copycat/v2/internal/permission"
+	"github.com/saltpay/copycat/v2/internal/slack"
 )
 
 const (
@@ -367,7 +367,7 @@ func processProject(job ProcessJob) ProcessResult {
 		if ctx.Err() != nil {
 			return ProcessResult{Project: project, Success: false, Error: errCancelled}
 		}
-		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v", err), AIOutput: aiOutput}
+		return ProcessResult{Project: project, Success: false, Error: fmt.Errorf("AI tool failed: %v\n%s", err, lastLines(aiOutput, 5)), AIOutput: aiOutput}
 	}
 
 	if ctx.Err() != nil {
@@ -410,7 +410,7 @@ func processProject(job ProcessJob) ProcessResult {
 	}
 	if len(output) == 0 {
 		cleanup()
-		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected"), AIOutput: aiOutput}
+		return ProcessResult{Project: project, Skipped: true, Error: fmt.Errorf("no changes detected\n%s", lastLines(aiOutput, 5)), AIOutput: aiOutput}
 	}
 
 	if ctx.Err() != nil {
@@ -757,4 +757,26 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 	} else {
 		sender.AssessmentResult("No projects were successfully assessed.", findings)
 	}
+}
+
+// lastLines returns the last n non-empty lines from s.
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	// Filter out empty lines
+	var nonEmpty []string
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			nonEmpty = append(nonEmpty, l)
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return ""
+	}
+	if len(nonEmpty) <= n {
+		return strings.Join(nonEmpty, "\n")
+	}
+	return strings.Join(nonEmpty[len(nonEmpty)-n:], "\n")
 }

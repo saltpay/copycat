@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/v2/internal/config"
 )
 
 // ensureLabelExists creates the 'copycat' label in the repository if it doesn't exist

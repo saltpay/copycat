@@ -1,4 +1,4 @@
-module github.com/saltpay/copycat
+module github.com/saltpay/copycat/v2
 
 go 1.25
 

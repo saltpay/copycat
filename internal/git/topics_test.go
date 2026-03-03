@@ -1,7 +1,7 @@
 package git
 
 import (
-	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/v2/internal/config"
 	"reflect"
 	"testing"
 )

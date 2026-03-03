@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/input"
+	"github.com/saltpay/copycat/v2/internal/config"
+	"github.com/saltpay/copycat/v2/internal/input"
 )
 
 // RunReset deletes the configuration and projects files.

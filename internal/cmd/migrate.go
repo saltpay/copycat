@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/saltpay/copycat/internal/config"
-	"github.com/saltpay/copycat/internal/input"
+	"github.com/saltpay/copycat/v2/internal/config"
+	"github.com/saltpay/copycat/v2/internal/input"
 
 	"gopkg.in/yaml.v3"
 )

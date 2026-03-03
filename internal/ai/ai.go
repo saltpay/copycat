@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/v2/internal/config"
 )
 
 func VibeCode(ctx context.Context, aiTool *config.AITool, prompt string, targetPath string, mcpConfigPath string, repoName string) (string, error) {
