@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/v2/internal/config"
 )
 
 func TestGeneratePRDescriptionStderr(t *testing.T) {

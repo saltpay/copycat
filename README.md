@@ -17,7 +17,7 @@ Copycat is an automation tool that enables you to apply consistent changes acros
 ### Using Go
 
 ```bash
-go install github.com/saltpay/copycat@latest
+go install github.com/saltpay/copycat/v2@latest
 ```
 
 ### From GitHub Releases

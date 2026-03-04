@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/saltpay/copycat/internal/permission"
+	"github.com/saltpay/copycat/v2/internal/permission"
 )
 
 const maxVisibleProjects = 10

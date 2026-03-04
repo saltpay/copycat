@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/v2/internal/config"
 )
 
 type repoTopicsResponse struct {

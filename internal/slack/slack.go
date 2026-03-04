@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/saltpay/copycat/internal/config"
+	"github.com/saltpay/copycat/v2/internal/config"
 )
 
 const slackAPIURL = "https://slack.com/api/chat.postMessage"
