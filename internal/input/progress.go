@@ -16,6 +16,7 @@ import (
 
 const maxVisibleProjects = 10
 const maxPermissionCmdLines = 8
+const maxPromptBoxLines = 8
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 var spinnerColors = []string{"205", "213", "141", "111", "75", "33", "40", "48", "214", "208"}
@@ -73,6 +74,11 @@ type PostStatusMsg struct {
 	Line string
 }
 
+// PromptUpdateMsg updates the displayed prompt (e.g. after rewriting).
+type PromptUpdateMsg struct {
+	Prompt string
+}
+
 // AssessmentResultMsg carries the final assessment summary and per-project findings.
 type AssessmentResultMsg struct {
 	Summary  string
@@ -108,6 +114,11 @@ func (s *StatusSender) Done(repo, status string, success, skipped bool, prURL st
 // PostStatus sends a post-processing status line to the progress view.
 func (s *StatusSender) PostStatus(line string) {
 	s.send(PostStatusMsg{Line: line})
+}
+
+// UpdatePrompt updates the displayed prompt in the progress view.
+func (s *StatusSender) UpdatePrompt(prompt string) {
+	s.send(PromptUpdateMsg{Prompt: prompt})
 }
 
 // AssessmentResult sends the final assessment summary and per-project findings.
@@ -161,12 +172,13 @@ type progressModel struct {
 	questionOptionIdx int // currently highlighted option index
 
 	// Context from wizard (displayed as header)
-	branchName     string
-	prTitle        string
-	prompt         string
-	originalPrompt string
-	promptExpanded bool
-	cursorOnPrompt bool
+	branchName         string
+	prTitle            string
+	prompt             string
+	originalPrompt     string
+	promptExpanded     bool
+	promptScrollOffset int
+	cursorOnPrompt     bool
 }
 
 // NewProgressModel creates a new progress model for tracking repository processing.
@@ -225,6 +237,9 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case PostStatusMsg:
 		m.postLines = append(m.postLines, msg.Line)
+	case PromptUpdateMsg:
+		m.prompt = msg.Prompt
+		m.promptScrollOffset = 0
 	case permission.PermissionRequestMsg:
 		return m.handlePermissionRequest(msg.Request)
 	case tickMsg:
@@ -282,11 +297,29 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.cursorOnPrompt && m.prompt != "" {
 				m.promptExpanded = !m.promptExpanded
+				m.promptScrollOffset = 0
 			}
 		case "up", "k":
-			m.moveCursor(-1)
+			if m.cursorOnPrompt && m.promptExpanded && m.promptScrollOffset > 0 {
+				m.promptScrollOffset--
+			} else {
+				m.moveCursor(-1)
+			}
 		case "down", "j":
-			m.moveCursor(1)
+			if m.cursorOnPrompt && m.promptExpanded {
+				lines := strings.Split(m.prompt, "\n")
+				maxScroll := len(lines) - maxPromptBoxLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.promptScrollOffset < maxScroll {
+					m.promptScrollOffset++
+				} else {
+					m.moveCursor(1)
+				}
+			} else {
+				m.moveCursor(1)
+			}
 		case "x":
 			if m.cursorOnPrompt {
 				break
@@ -608,9 +641,9 @@ func (m progressModel) View() string {
 	if m.completed > 0 {
 		avgPerItem := elapsed / time.Duration(m.completed)
 		remaining := avgPerItem * time.Duration(m.total-m.completed)
-		timeInfo = fmt.Sprintf("[%s:%s]", formatDuration(elapsed), formatDuration(remaining))
+		timeInfo = fmt.Sprintf("%s (remaining: ~%s)", formatDuration(elapsed), formatDuration(remaining))
 	} else {
-		timeInfo = fmt.Sprintf("[%s:--]", formatDuration(elapsed))
+		timeInfo = fmt.Sprintf("%s (remaining: --)", formatDuration(elapsed))
 	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
@@ -641,7 +674,7 @@ func (m progressModel) View() string {
 		}
 
 		if m.promptExpanded {
-			// Expanded: show full prompt in a bordered box
+			// Expanded: show prompt in a scrollable bordered box
 			btnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
 			b.WriteString(promptPrefix + dimLabel.Render("Prompt ") + btnStyle.Render("[▼ collapse]"))
 			b.WriteString("\n")
@@ -650,22 +683,42 @@ func (m progressModel) View() string {
 			if boxWidth < 40 {
 				boxWidth = 40
 			}
+			maxContentWidth := boxWidth - 4
+
+			promptLines := strings.Split(m.prompt, "\n")
+			scrollStart := m.promptScrollOffset
+			scrollEnd := scrollStart + maxPromptBoxLines
+			if scrollEnd > len(promptLines) {
+				scrollEnd = len(promptLines)
+			}
+
+			promptLineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+			var contentLines []string
+			if scrollStart > 0 {
+				contentLines = append(contentLines, dimLabel.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
+			}
+			for _, line := range promptLines[scrollStart:scrollEnd] {
+				if len(line) > maxContentWidth {
+					line = line[:maxContentWidth-3] + "..."
+				}
+				contentLines = append(contentLines, promptLineStyle.Render(line))
+			}
+			if len(promptLines)-scrollEnd > 0 {
+				contentLines = append(contentLines, dimLabel.Render(fmt.Sprintf("  ↓ %d more", len(promptLines)-scrollEnd)))
+			}
+
 			boxStyle := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("238")).
 				Padding(0, 1).
 				Width(boxWidth)
-			promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-			rendered := boxStyle.Render(promptStyle.Render(m.prompt))
+			rendered := boxStyle.Render(strings.Join(contentLines, "\n"))
 			for _, line := range strings.Split(rendered, "\n") {
 				b.WriteString("    " + line + "\n")
 			}
 		} else {
 			// Collapsed: single line with expand hint
-			maxLen := m.termWidth - 22
-			if maxLen < 30 {
-				maxLen = 30
-			}
+			maxLen := 80
 			p := m.prompt
 			p = strings.ReplaceAll(p, "\n", " ")
 			if len(p) > maxLen {
@@ -784,6 +837,10 @@ func (m progressModel) View() string {
 	}
 	if m.cursorOnPrompt {
 		if m.promptExpanded {
+			promptLines := strings.Split(m.prompt, "\n")
+			if len(promptLines) > maxPromptBoxLines {
+				hints = append(hints, helpStyle.Render("↑↓: scroll"))
+			}
 			hints = append(hints, helpStyle.Render("enter: collapse"))
 		} else {
 			hints = append(hints, helpStyle.Render("enter: expand"))

@@ -79,9 +79,10 @@ type wizardModel struct {
 	prTitle      string
 
 	// Prompt
-	promptInput textinput.Model
-	prompt      string
-	useEditor   bool
+	promptInput        textinput.Model
+	prompt             string
+	useEditor          bool
+	promptScrollOffset int
 
 	// State
 	termWidth int
@@ -255,6 +256,19 @@ func (m wizardModel) updateIgnoreInstructionsStep(msg tea.Msg) (tea.Model, tea.C
 	switch keyMsg.String() {
 	case "q":
 		return m, tea.Quit
+	case "up", "k":
+		if m.promptScrollOffset > 0 {
+			m.promptScrollOffset--
+		}
+	case "down", "j":
+		lines := strings.Split(m.prompt, "\n")
+		maxScroll := len(lines) - maxPromptBoxLines
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.promptScrollOffset < maxScroll {
+			m.promptScrollOffset++
+		}
 	case " ":
 		m.ignoreInstructions = !m.ignoreInstructions
 	case "enter":
@@ -431,7 +445,12 @@ func (m wizardModel) View() string {
 	case stepPrompt:
 		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc/ctrl+c: quit"))
 	case stepIgnoreInstructions:
-		b.WriteString(helpStyle.Render("  space: toggle • enter: confirm • q/ctrl+c: quit"))
+		promptLines := strings.Split(m.prompt, "\n")
+		if len(promptLines) > maxPromptBoxLines {
+			b.WriteString(helpStyle.Render("  ↑/↓: scroll question • space: toggle • enter: confirm • q/ctrl+c: quit"))
+		} else {
+			b.WriteString(helpStyle.Render("  space: toggle • enter: confirm • q/ctrl+c: quit"))
+		}
 	}
 	b.WriteString("\n")
 
@@ -564,12 +583,15 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 
 	// Prompt
 	if m.prompt != "" && m.currentStep != stepPrompt {
-		display := m.prompt
-		if len(display) > 60 {
-			display = display[:57] + "..."
+		promptLines := strings.Split(m.prompt, "\n")
+		if len(promptLines) <= 1 && len(m.prompt) <= 80 {
+			b.WriteString(completed.Render(fmt.Sprintf("  ✓ Question: %s", m.prompt)))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(completed.Render("  ✓ Question:"))
+			b.WriteString("\n")
+			m.viewPromptBox(b, hint)
 		}
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Question: %s", display)))
-		b.WriteString("\n")
 	} else if m.currentStep == stepPrompt {
 		b.WriteString(label.Render("  Assessment Question"))
 		b.WriteString("\n")
@@ -583,6 +605,49 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 	// Ignore Agent Instructions (after prompt)
 	if !m.skipIgnoreInstructions {
 		m.viewIgnoreInstructions(b, completed, label, pending, cursor, hint)
+	}
+}
+
+func (m wizardModel) viewPromptBox(b *strings.Builder, hint lipgloss.Style) {
+	lines := strings.Split(m.prompt, "\n")
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+
+	boxWidth := m.termWidth - 10
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	maxContentWidth := boxWidth - 4
+
+	scrollStart := m.promptScrollOffset
+	scrollEnd := scrollStart + maxPromptBoxLines
+	if scrollEnd > len(lines) {
+		scrollEnd = len(lines)
+	}
+
+	var contentLines []string
+	if scrollStart > 0 {
+		contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
+	}
+	for _, line := range lines[scrollStart:scrollEnd] {
+		if len(line) > maxContentWidth {
+			line = line[:maxContentWidth-3] + "..."
+		}
+		contentLines = append(contentLines, lineStyle.Render(line))
+	}
+	if len(lines)-scrollEnd > 0 {
+		contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(lines)-scrollEnd)))
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("238")).
+		Padding(0, 1).
+		Width(boxWidth)
+
+	rendered := boxStyle.Render(strings.Join(contentLines, "\n"))
+	for _, boxLine := range strings.Split(rendered, "\n") {
+		b.WriteString("    " + boxLine + "\n")
 	}
 }
 

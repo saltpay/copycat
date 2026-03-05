@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -44,6 +46,9 @@ const (
 	notifFocusRepos                   // repo checkbox list
 	notifFocusSend                    // send button
 )
+
+// clipboardFeedbackMsg clears the clipboard feedback after a delay.
+type clipboardFeedbackMsg struct{}
 
 // slackSendDoneMsg carries the results of sending Slack notifications.
 type slackSendDoneMsg struct {
@@ -130,6 +135,9 @@ type dashboardModel struct {
 	findingScrollOffset int    // scroll offset within the expanded finding box
 	summaryExpanded     bool   // whether the overall summary box is expanded
 	summaryScrollOffset int    // scroll offset within the expanded summary box
+
+	// Clipboard feedback
+	clipboardFeedback string // transient message shown after copy
 
 	// Tabbed done screen
 	activeTab         int            // current tab index
@@ -404,7 +412,7 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Pump status channel messages
 	var cmds []tea.Cmd
 	switch msg.(type) {
-	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, AssessmentResultMsg:
+	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, AssessmentResultMsg, PromptUpdateMsg:
 		cmds = append(cmds, listenForStatus(m.statusCh))
 	}
 
@@ -464,6 +472,12 @@ func (m dashboardModel) isNotifTab() bool {
 }
 
 func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle clipboard feedback clear
+	if _, ok := msg.(clipboardFeedbackMsg); ok {
+		m.clipboardFeedback = ""
+		return m, nil
+	}
+
 	// Handle Slack send done message (works for any tab)
 	if slackDone, ok := msg.(slackSendDoneMsg); ok {
 		m.notifPhase = notifPhaseDone
@@ -646,6 +660,14 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 			return m, nil
 		}
 		switch keyMsg.String() {
+		case "c":
+			text := m.buildAssessmentReport()
+			if err := clipboard.WriteAll(text); err != nil {
+				m.clipboardFeedback = "⚠️ Failed to copy"
+			} else {
+				m.clipboardFeedback = "✓ Copied to clipboard"
+			}
+			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clipboardFeedbackMsg{} })
 		case "enter", "l":
 			summaryLines := strings.Split(m.assessmentSummary, "\n")
 			if len(summaryLines) > maxLogLines {
@@ -687,6 +709,14 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 	}
 
 	switch keyMsg.String() {
+	case "c":
+		text := m.buildAssessmentReport()
+		if err := clipboard.WriteAll(text); err != nil {
+			m.clipboardFeedback = "⚠️ Failed to copy"
+		} else {
+			m.clipboardFeedback = "✓ Copied to clipboard"
+		}
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clipboardFeedbackMsg{} })
 	case "enter", "l":
 		if m.doneCursorRepo != "" {
 			results := m.doneResults()
@@ -1162,6 +1192,10 @@ func (m dashboardModel) renderDoneSummary() string {
 		b.WriteString(titleStyle.Render("Processing interrupted"))
 	} else {
 		b.WriteString(titleStyle.Render("Processing complete!"))
+	}
+	if m.clipboardFeedback != "" {
+		feedbackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
+		b.WriteString("  " + feedbackStyle.Render(m.clipboardFeedback))
 	}
 	b.WriteString("\n")
 
@@ -1755,6 +1789,7 @@ func (m dashboardModel) renderDoneHelp() string {
 				}
 			}
 		}
+		hints = append(hints, helpStyle.Render("c: copy report"))
 	} else {
 		// Local results tab
 		results := m.doneResults()
@@ -1788,6 +1823,34 @@ func (m dashboardModel) renderDoneHelp() string {
 	}
 	hints = append(hints, helpStyle.Render("q: exit"))
 	return "  " + strings.Join(hints, helpStyle.Render("  •  "))
+}
+
+// buildAssessmentReport builds a plain-text report of the assessment for clipboard.
+func (m dashboardModel) buildAssessmentReport() string {
+	var b strings.Builder
+
+	b.WriteString("# Assessment Report\n\n")
+
+	if m.assessmentSummary != "" {
+		b.WriteString("## Summary\n\n")
+		b.WriteString(m.assessmentSummary)
+		b.WriteString("\n\n")
+	}
+
+	if len(m.assessmentFindings) > 0 {
+		b.WriteString("## Per-Project Findings\n\n")
+		for _, repo := range m.progress.repos {
+			finding, exists := m.assessmentFindings[repo]
+			if !exists || finding == "" {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("### %s\n\n", repo))
+			b.WriteString(finding)
+			b.WriteString("\n\n")
+		}
+	}
+
+	return strings.TrimSpace(b.String())
 }
 
 // aiOutputLines splits AI output into non-empty lines for display.

@@ -105,6 +105,10 @@ func Load(filename string) (*Config, error) {
 		cfg.Parallelism = 10
 	}
 
+	if len(cfg.AgentInstructions) == 0 {
+		cfg.AgentInstructions = DefaultConfig("").AgentInstructions
+	}
+
 	if len(cfg.AIToolsConfig.Tools) == 0 {
 		return nil, fmt.Errorf("no AI tools defined in %s", filename)
 	}

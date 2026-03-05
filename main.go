@@ -648,7 +648,12 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 		sender.PostStatus(fmt.Sprintf("⚠️ Failed to rewrite prompt, using original: %v", err))
 		rewrittenPrompt = setup.Prompt
 	} else {
-		sender.PostStatus(fmt.Sprintf("✓ Rewritten question: %s", rewrittenPrompt))
+		preview := strings.ReplaceAll(rewrittenPrompt, "\n", " ")
+		if len(preview) > 80 {
+			preview = preview[:77] + "..."
+		}
+		sender.PostStatus(fmt.Sprintf("✓ Rewritten question: %s", preview))
+		sender.UpdatePrompt(rewrittenPrompt)
 	}
 
 	checkpoint := parallelism
