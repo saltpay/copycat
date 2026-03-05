@@ -35,6 +35,8 @@ type projectSelectorModel struct {
 	// Filter fields
 	filterMode       bool
 	filterText       string
+	filterTerms      []string // locked/confirmed filter terms during editing
+	appliedTerms     []string // terms applied after exiting filter mode
 	filteredProjects []config.Project
 	// Track if user has manually modified selection in filter mode
 	manualSelection bool
@@ -90,70 +92,59 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitted = true
 				return m, tea.Quit
 			case "esc":
-				if m.filterText == "" {
-					// If filter text is empty, exit filter mode entirely
-					m.filterMode = false
-					m.manualSelection = false // Reset manual selection flag
-					m.filteredProjects = m.projects
-					m.cursor = 0
-					return m, nil
-				} else {
-					// If filter text exists, just clear the filter text but stay in filter mode
+				if m.filterText != "" {
+					// Clear current text first
 					m.filterText = ""
+				} else if len(m.filterTerms) > 0 {
+					// Then clear all locked terms
+					m.filterTerms = nil
+				} else {
+					// Finally exit filter mode
+					m.filterMode = false
+					m.manualSelection = false
+					m.appliedTerms = nil
 					m.filteredProjects = m.projects
-					// If user hasn't manually modified selection, clear all selections (projects start unselected)
-					if !m.manualSelection {
-						m.selected = make(map[int]struct{}) // Clear all selections when filter is cleared
-					}
 					m.cursor = 0
 					return m, nil
 				}
+				m.filteredProjects = m.applyAllFilters()
+				if !m.manualSelection {
+					m.autoSelectFiltered()
+				}
+				m.cursor = 0
+				return m, nil
 			case "backspace":
 				if len(m.filterText) > 0 {
 					m.filterText = m.filterText[:len(m.filterText)-1]
-					m.filteredProjects = m.filterProjectsByTopic(m.filterText)
-					// If user hasn't manually modified selection, handle auto-selection based on filter text
-					if !m.manualSelection {
-						if m.filterText == "" {
-							// If no filter text, deselect all projects
-							m.selected = make(map[int]struct{})
-						} else {
-							// If filter text exists, auto-select matching projects and deselect non-matching
-							// Create a set of filtered project indices for quick lookup
-							filteredProjectIndices := make(map[int]struct{})
-							for _, project := range m.filteredProjects {
-								currentProjectIdx := m.findOriginalProjectIndex(project)
-								filteredProjectIndices[currentProjectIdx] = struct{}{}
-							}
-
-							// Select all filtered projects
-							for _, project := range m.filteredProjects {
-								currentProjectIdx := m.findOriginalProjectIndex(project)
-								m.selected[currentProjectIdx] = struct{}{}
-							}
-
-							// Deselect any projects not in the filtered results
-							for i := range m.projects {
-								if _, found := filteredProjectIndices[i]; !found {
-									delete(m.selected, i)
-								}
-							}
-						}
-					}
-					m.cursor = 0
+				} else if len(m.filterTerms) > 0 {
+					// Remove last locked term when backspacing on empty input
+					m.filterTerms = m.filterTerms[:len(m.filterTerms)-1]
 				}
+				m.filteredProjects = m.applyAllFilters()
+				if !m.manualSelection {
+					m.autoSelectFiltered()
+				}
+				m.cursor = 0
 				return m, nil
 			case "enter":
-				// Exit filter mode
-				if m.filterText == "" {
-					// If no filter text, clear all selections before exiting
-					m.selected = make(map[int]struct{})
+				if m.filterText != "" {
+					// Lock current text as a filter term
+					m.filterTerms = append(m.filterTerms, strings.TrimSpace(m.filterText))
+					m.filterText = ""
+					m.filteredProjects = m.applyAllFilters()
+					if !m.manualSelection {
+						m.autoSelectFiltered()
+					}
+					m.cursor = 0
+				} else {
+					// Empty text: exit filter mode, keep filtered list and selections
+					m.filterMode = false
+					m.manualSelection = false
+					m.appliedTerms = m.filterTerms
+					m.filterTerms = nil
+					m.filterText = ""
+					m.cursor = 0
 				}
-				m.filterMode = false
-				m.manualSelection = false // Reset manual selection flag when exiting
-				m.filterText = ""
-				m.filteredProjects = m.projects
-				m.cursor = 0
 				return m, nil
 			default:
 				// Add character to filter text
@@ -162,34 +153,9 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if msg.Type == tea.KeyRunes {
 					m.filterText += msg.String()
-					m.filteredProjects = m.filterProjectsByTopic(m.filterText)
-					// If user hasn't manually modified selection, handle auto-selection based on filter text
+					m.filteredProjects = m.applyAllFilters()
 					if !m.manualSelection {
-						if m.filterText == "" {
-							// If no filter text, deselect all projects
-							m.selected = make(map[int]struct{})
-						} else {
-							// If filter text exists, auto-select matching projects and deselect non-matching
-							// Create a set of filtered project indices for quick lookup
-							filteredProjectIndices := make(map[int]struct{})
-							for _, project := range m.filteredProjects {
-								currentProjectIdx := m.findOriginalProjectIndex(project)
-								filteredProjectIndices[currentProjectIdx] = struct{}{}
-							}
-
-							// Select all filtered projects
-							for _, project := range m.filteredProjects {
-								currentProjectIdx := m.findOriginalProjectIndex(project)
-								m.selected[currentProjectIdx] = struct{}{}
-							}
-
-							// Deselect any projects not in the filtered results
-							for i := range m.projects {
-								if _, found := filteredProjectIndices[i]; !found {
-									delete(m.selected, i)
-								}
-							}
-						}
+						m.autoSelectFiltered()
 					}
 					m.cursor = 0
 				}
@@ -205,6 +171,7 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Enter filter mode
 				m.filterMode = true
 				m.filterText = ""
+				m.filterTerms = nil
 				m.filteredProjects = m.projects
 				m.cursor = 0
 				// Reset manual selection state when entering filter mode
@@ -350,6 +317,65 @@ func (m projectSelectorModel) filterProjectsByTopic(filterText string) []config.
 	return filtered
 }
 
+// applyAllFilters combines locked filter terms and current text to filter projects.
+// Each term is OR-matched against topics; projects must match ALL terms (AND between terms).
+func (m projectSelectorModel) applyAllFilters() []config.Project {
+	allTerms := make([]string, len(m.filterTerms))
+	copy(allTerms, m.filterTerms)
+	if t := strings.TrimSpace(m.filterText); t != "" {
+		allTerms = append(allTerms, t)
+	}
+
+	if len(allTerms) == 0 {
+		return m.projects
+	}
+
+	var filtered []config.Project
+	for _, project := range m.projects {
+		matchesAll := true
+		for _, term := range allTerms {
+			termLower := strings.ToLower(term)
+			termMatches := false
+			for _, topic := range project.Topics {
+				if strings.Contains(strings.ToLower(topic), termLower) {
+					termMatches = true
+					break
+				}
+			}
+			if !termMatches {
+				matchesAll = false
+				break
+			}
+		}
+		if matchesAll {
+			filtered = append(filtered, project)
+		}
+	}
+	return filtered
+}
+
+// autoSelectFiltered selects all filtered projects and deselects non-matching ones.
+func (m *projectSelectorModel) autoSelectFiltered() {
+	hasFilters := len(m.filterTerms) > 0 || strings.TrimSpace(m.filterText) != ""
+	if !hasFilters {
+		m.selected = make(map[int]struct{})
+		return
+	}
+
+	filteredSet := make(map[int]struct{})
+	for _, project := range m.filteredProjects {
+		filteredSet[m.findOriginalProjectIndex(project)] = struct{}{}
+	}
+	for _, project := range m.filteredProjects {
+		m.selected[m.findOriginalProjectIndex(project)] = struct{}{}
+	}
+	for i := range m.projects {
+		if _, found := filteredSet[i]; !found {
+			delete(m.selected, i)
+		}
+	}
+}
+
 func (m projectSelectorModel) findOriginalProjectIndex(project config.Project) int {
 	for i, p := range m.projects {
 		if p.Repo == project.Repo {
@@ -385,16 +411,16 @@ func (m projectSelectorModel) calculateColumns() int {
 	}
 
 	// Determine which projects to use for column calculation
-	projectsToUse := m.projects
-	if m.filterMode {
-		projectsToUse = m.filteredProjects
-	}
+	projectsToUse := m.filteredProjects
 
 	// Find longest project name
 	maxLen := 0
 	for i, p := range projectsToUse {
-		// Format: "[ ] 123. repo-name"
+		// Format: "[ ] 123. repo-name" or "[ ] 123. repo-name ⚠"
 		itemLen := len(fmt.Sprintf("[ ] %d. %s", i+1, p.Repo))
+		if strings.TrimSpace(p.SlackRoom) == "" {
+			itemLen += 2 // " ⚠"
+		}
 		if itemLen > maxLen {
 			maxLen = itemLen
 		}
@@ -488,23 +514,40 @@ func (m projectSelectorModel) View() string {
 	if m.filterMode {
 		b.WriteString(titleStyle.Render("Filter Projects by Topic"))
 		b.WriteString("\n")
+		// Render locked filter terms as chips
+		chipStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Background(lipgloss.Color("205")).
+			Padding(0, 1)
+		for _, term := range m.filterTerms {
+			b.WriteString(chipStyle.Render(term))
+			b.WriteString(" ")
+		}
 		// Filter input field
 		filterStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
-			Background(lipgloss.Color("235")).
+			Foreground(lipgloss.Color("255")).
+			Background(lipgloss.Color("206")).
 			Padding(0, 1)
 		b.WriteString(filterStyle.Render("> " + m.filterText))
 		b.WriteString("\n\n")
 	} else {
 		b.WriteString(titleStyle.Render("Select Projects"))
+		if len(m.appliedTerms) > 0 {
+			b.WriteString("\n")
+			chipStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Background(lipgloss.Color("205")).
+				Padding(0, 1)
+			for _, term := range m.appliedTerms {
+				b.WriteString(chipStyle.Render(term))
+				b.WriteString(" ")
+			}
+		}
 		b.WriteString("\n\n")
 	}
 
 	// Determine which projects to display
-	projectsToDisplay := m.projects
-	if m.filterMode {
-		projectsToDisplay = m.filteredProjects
-	}
+	projectsToDisplay := m.filteredProjects
 
 	// Calculate columns and layout
 	numCols := m.calculateColumns()
@@ -556,6 +599,9 @@ func (m projectSelectorModel) View() string {
 
 			// Item text
 			itemText := fmt.Sprintf("%s %d. %s", checkbox, idx+1, project.Repo)
+			if strings.TrimSpace(project.SlackRoom) == "" {
+				itemText += " ⚠"
+			}
 
 			// Style based on cursor position
 			itemStyle := lipgloss.NewStyle().Width(colWidth)
@@ -587,7 +633,7 @@ func (m projectSelectorModel) View() string {
 
 	var help string
 	if m.filterMode {
-		help = "Type to filter by topic • matching projects auto-selected • esc: clear filter • enter: exit filter • ↑/↓/←/→: navigate • space: toggle selection • a: select/deselect all • ctrl+c: quit"
+		help = "Type to filter • enter: lock term • enter (empty): apply • esc: clear • backspace: remove last term • ↑/↓/←/→: navigate • space: toggle • a: toggle all • ctrl+c: quit"
 	} else {
 		help = "f: filter by topic • ↑/↓/←/→: navigate • space: toggle • a: toggle all • r: refresh • enter: confirm • q: quit"
 	}
@@ -603,7 +649,7 @@ func (m projectSelectorModel) View() string {
 	countText := fmt.Sprintf("\nSelected: %d project(s)", selectedCount)
 	b.WriteString(countStyle.Render(countText))
 
-	if m.filterMode {
+	if len(m.filteredProjects) < len(m.projects) {
 		filterCountText := fmt.Sprintf("\nShowing: %d of %d projects", len(m.filteredProjects), len(m.projects))
 		b.WriteString(countStyle.Render(filterCountText))
 	}
