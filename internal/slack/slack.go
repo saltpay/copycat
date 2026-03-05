@@ -49,7 +49,7 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 	}
 
 	if len(projectsByRoom) == 0 {
-		onStatus("⚠️  No Slack rooms configured for successful projects, skipping notifications")
+		onStatus("⚠  No Slack rooms configured for successful projects, skipping notifications")
 		return
 	}
 
@@ -63,7 +63,7 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 			repoNames[i] = r.Repo
 		}
 		if err != nil {
-			onStatus(fmt.Sprintf("⚠️  Failed to send notification to %s for: %s: %v", channel, strings.Join(repoNames, ", "), err))
+			onStatus(fmt.Sprintf("⚠  Failed to send notification to %s for: %s: %v", channel, strings.Join(repoNames, ", "), err))
 		} else {
 			onStatus(fmt.Sprintf("✓ Notification sent to %s for: %s", channel, strings.Join(repoNames, ", ")))
 		}
@@ -87,7 +87,7 @@ func SendAssessmentFindings(projects []config.Project, question string, findings
 	}
 
 	if len(projectsByRoom) == 0 {
-		onStatus("⚠️  No Slack rooms configured for assessed projects, skipping notifications")
+		onStatus("⚠  No Slack rooms configured for assessed projects, skipping notifications")
 		return
 	}
 
@@ -109,7 +109,7 @@ func SendAssessmentFindings(projects []config.Project, question string, findings
 		err := sendMessage(token, channel, message)
 		repoNames := strings.Join(repos, ", ")
 		if err != nil {
-			onStatus(fmt.Sprintf("⚠️  Failed to send findings to %s for: %s: %v", channel, repoNames, err))
+			onStatus(fmt.Sprintf("⚠  Failed to send findings to %s for: %s: %v", channel, repoNames, err))
 		} else {
 			onStatus(fmt.Sprintf("✓ Findings sent to %s for: %s", channel, repoNames))
 		}

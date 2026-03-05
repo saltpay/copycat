@@ -343,12 +343,12 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 	if m.wizardResult.Action != "assessment" && m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
 		permServer, err := permission.NewPermissionServer(m.statusCh)
 		if err != nil {
-			log.Printf("⚠️ Failed to start permission server: %v", err)
+			log.Printf("⚠ Failed to start permission server: %v", err)
 		} else {
 			m.permServer = permServer
 			mcpPath, cleanup, err := permission.GenerateMCPConfig(permServer.Port())
 			if err != nil {
-				log.Printf("⚠️ Failed to generate MCP config: %v", err)
+				log.Printf("⚠ Failed to generate MCP config: %v", err)
 				permServer.Shutdown(context.Background())
 				m.permServer = nil
 			} else {
@@ -663,7 +663,7 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 		case "c":
 			text := m.buildAssessmentReport()
 			if err := clipboard.WriteAll(text); err != nil {
-				m.clipboardFeedback = "⚠️ Failed to copy"
+				m.clipboardFeedback = "⚠ Failed to copy"
 			} else {
 				m.clipboardFeedback = "✓ Copied to clipboard"
 			}
@@ -712,7 +712,7 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 	case "c":
 		text := m.buildAssessmentReport()
 		if err := clipboard.WriteAll(text); err != nil {
-			m.clipboardFeedback = "⚠️ Failed to copy"
+			m.clipboardFeedback = "⚠ Failed to copy"
 		} else {
 			m.clipboardFeedback = "✓ Copied to clipboard"
 		}
@@ -1540,7 +1540,7 @@ func (m dashboardModel) renderAssessProjectsTabContent() string {
 
 			b.WriteString(fmt.Sprintf("%s%s %s%s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), findingPreview, detailsBtn))
 		} else {
-			b.WriteString(fmt.Sprintf("%s%s Failed ⚠️ %s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
+			b.WriteString(fmt.Sprintf("%s%s Failed ⚠ %s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
 		}
 
 		if isExpanded {

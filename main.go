@@ -378,7 +378,7 @@ func processProject(job ProcessJob) ProcessResult {
 	// Restore agent instruction files before committing
 	if len(removedFiles) > 0 {
 		if restoreErr := ai.RestoreInstructionFiles(ctx, targetPath, removedFiles); restoreErr != nil {
-			log.Printf("⚠️ Failed to restore instruction files for %s: %v", project.Repo, restoreErr)
+			log.Printf("⚠ Failed to restore instruction files for %s: %v", project.Repo, restoreErr)
 		}
 	}
 
@@ -531,13 +531,13 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 					var status string
 					switch {
 					case result.Success:
-						status = fmt.Sprintf("Completed ✅ PR: \033]8;;%s\033\\%s\033]8;;\033\\", result.PRURL, result.PRURL)
+						status = fmt.Sprintf("Completed ✓ PR: \033]8;;%s\033\\%s\033]8;;\033\\", result.PRURL, result.PRURL)
 					case result.Skipped:
 						status = fmt.Sprintf("Skipped ⊘ %v", result.Error)
 					case result.Error == errCancelled:
 						status = "Cancelled ✗"
 					default:
-						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+						status = fmt.Sprintf("Failed ⚠ %v", result.Error)
 					}
 					sender.Done(repo, status, result.Success, result.Skipped, result.PRURL, result.Error, result.AIOutput)
 				}
@@ -645,7 +645,7 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 	sender.PostStatus("Rewriting question for per-project assessment...")
 	rewrittenPrompt, err := ai.RewritePromptForProject(context.Background(), setup.AITool, setup.Prompt)
 	if err != nil {
-		sender.PostStatus(fmt.Sprintf("⚠️ Failed to rewrite prompt, using original: %v", err))
+		sender.PostStatus(fmt.Sprintf("⚠ Failed to rewrite prompt, using original: %v", err))
 		rewrittenPrompt = setup.Prompt
 	} else {
 		preview := strings.ReplaceAll(rewrittenPrompt, "\n", " ")
@@ -723,11 +723,11 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 						mu.Lock()
 						findings[repo] = result.Finding
 						mu.Unlock()
-						status = "Assessed ✅"
+						status = "Assessed ✓"
 					} else if result.Error == errCancelled {
 						status = "Cancelled ✗"
 					} else {
-						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+						status = fmt.Sprintf("Failed ⚠ %v", result.Error)
 					}
 					sender.Done(repo, status, result.Success, false, "", result.Error, "")
 				}
@@ -755,7 +755,7 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 		sender.PostStatus("Summarizing findings across all projects...")
 		summary, err := ai.SummarizeFindings(context.Background(), setup.AITool, findings)
 		if err != nil {
-			sender.PostStatus(fmt.Sprintf("⚠️ Failed to summarize findings: %v", err))
+			sender.PostStatus(fmt.Sprintf("⚠ Failed to summarize findings: %v", err))
 			summary = "Summary generation failed."
 		}
 		sender.AssessmentResult(summary, findings)
