@@ -82,6 +82,37 @@ func SummarizeFindings(ctx context.Context, aiTool *config.AITool, findings map[
 	return strings.TrimSpace(summary), nil
 }
 
+func FormatForSlack(ctx context.Context, aiTool *config.AITool, text string) (string, error) {
+	prompt := fmt.Sprintf(`You are a text formatter. Your ONLY job is to convert the formatting of the text below into Slack mrkdwn syntax. You must NOT alter, add, remove, summarize, or rephrase any content.
+
+Formatting rules:
+- Use *bold*, _italic_, and `+"`"+`code`+"`"+` for emphasis and technical terms
+- Format code blocks with triple backticks
+- Convert markdown links [label](url) to Slack format <url|label>
+- Use • for bulleted lists, numbers for ordered lists
+- Wrap markdown tables (pipe-delimited rows) in triple backticks so they render as monospace in Slack
+
+Strict rules:
+- Output ONLY the reformatted text. No preamble, no commentary, no sign-off.
+- Do NOT add any information that is not in the original text.
+- Do NOT remove or change any names, numbers, URLs, IDs, dates, or references.
+- Do NOT answer questions, perform actions, or generate new content.
+- Do NOT add emojis.
+- If the original text contains a question directed at the user, keep it exactly as-is.
+- Preserve the exact same meaning and information — change ONLY the formatting.
+
+Original response:
+%s`, text)
+
+	cmd := aiTool.BuildCommandContext(ctx, prompt, pickArgs(aiTool))
+	output, err := cmd.Output()
+	if err != nil {
+		return text, fmt.Errorf("failed to format for Slack: %v", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 func GeneratePRDescription(ctx context.Context, aiTool *config.AITool, project config.Project, aiOutput string, targetPath string) (string, error) {
 	summaryPrompt := fmt.Sprintf("Given the changes below, produce a 2-3 sentence PR description. Do not include any introductory text, headers, or commentary - respond with the description only.\n\nChanges:\n%s", aiOutput)
 

@@ -156,6 +156,10 @@ func main() {
 		},
 		SendSlackNotifications:      slack.SendNotifications,
 		SendSlackAssessmentFindings: slack.SendAssessmentFindings,
+		SendSlackAssessmentSummary:  slack.SendAssessmentSummary,
+		FormatForSlack: func(aiTool *config.AITool, text string) (string, error) {
+			return ai.FormatForSlack(context.Background(), aiTool, text)
+		},
 	}
 
 	result, err := input.RunDashboard(dashCfg)
@@ -635,7 +639,12 @@ func assessProject(job AssessJob) AssessResult {
 	job.UpdateStatus("Cleaning up...")
 	cleanup()
 
-	return AssessResult{Project: project, Success: true, Finding: strings.TrimSpace(finding)}
+	trimmed := strings.TrimSpace(finding)
+	if trimmed == "" {
+		return AssessResult{Project: project, Error: fmt.Errorf("assessment returned empty response")}
+	}
+
+	return AssessResult{Project: project, Success: true, Finding: trimmed}
 }
 
 func assessReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
@@ -645,14 +654,14 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 	sender.PostStatus("Rewriting question for per-project assessment...")
 	rewrittenPrompt, err := ai.RewritePromptForProject(context.Background(), setup.AITool, setup.Prompt)
 	if err != nil {
-		sender.PostStatus(fmt.Sprintf("⚠ Failed to rewrite prompt, using original: %v", err))
+		sender.ReplacePostStatus(fmt.Sprintf("⚠ Failed to rewrite prompt, using original: %v", err))
 		rewrittenPrompt = setup.Prompt
 	} else {
 		preview := strings.ReplaceAll(rewrittenPrompt, "\n", " ")
 		if len(preview) > 80 {
 			preview = preview[:77] + "..."
 		}
-		sender.PostStatus(fmt.Sprintf("✓ Rewritten question: %s", preview))
+		sender.ReplacePostStatus(fmt.Sprintf("✓ Rewritten question: %s", preview))
 		sender.UpdatePrompt(rewrittenPrompt)
 	}
 

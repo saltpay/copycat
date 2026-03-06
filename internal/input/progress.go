@@ -8,6 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,6 +23,57 @@ const maxPromptBoxLines = 8
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 var spinnerColors = []string{"205", "213", "141", "111", "75", "33", "40", "48", "214", "208"}
+
+// progressKeyMap defines keybindings for the progress view.
+type progressKeyMap struct {
+	Navigate key.Binding
+	Cancel   key.Binding
+	Expand   key.Binding
+	Collapse key.Binding
+	Scroll   key.Binding
+	Abort    key.Binding
+}
+
+func (k progressKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Navigate, k.Cancel, k.Expand, k.Collapse, k.Scroll, k.Abort}
+}
+
+func (k progressKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{k.ShortHelp()}
+}
+
+func newProgressKeyMap() progressKeyMap {
+	return progressKeyMap{
+		Navigate: key.NewBinding(
+			key.WithKeys("up", "down"),
+			key.WithHelp("↑↓", "navigate"),
+		),
+		Cancel: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "cancel"),
+			key.WithDisabled(),
+		),
+		Expand: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "expand"),
+			key.WithDisabled(),
+		),
+		Collapse: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "collapse"),
+			key.WithDisabled(),
+		),
+		Scroll: key.NewBinding(
+			key.WithKeys("up", "down"),
+			key.WithHelp("↑↓", "scroll"),
+			key.WithDisabled(),
+		),
+		Abort: key.NewBinding(
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "abort all"),
+		),
+	}
+}
 
 // CancelRegistry is a thread-safe map of repo -> context.CancelFunc.
 type CancelRegistry struct {
@@ -74,6 +128,11 @@ type PostStatusMsg struct {
 	Line string
 }
 
+// PostStatusReplaceMsg replaces the last post-processing status line.
+type PostStatusReplaceMsg struct {
+	Line string
+}
+
 // PromptUpdateMsg updates the displayed prompt (e.g. after rewriting).
 type PromptUpdateMsg struct {
 	Prompt string
@@ -114,6 +173,11 @@ func (s *StatusSender) Done(repo, status string, success, skipped bool, prURL st
 // PostStatus sends a post-processing status line to the progress view.
 func (s *StatusSender) PostStatus(line string) {
 	s.send(PostStatusMsg{Line: line})
+}
+
+// ReplacePostStatus replaces the last post-processing status line.
+func (s *StatusSender) ReplacePostStatus(line string) {
+	s.send(PostStatusReplaceMsg{Line: line})
 }
 
 // UpdatePrompt updates the displayed prompt in the progress view.
@@ -157,6 +221,10 @@ type progressModel struct {
 	manualScroll bool
 	scrollOffset int
 
+	// Per-repo timing
+	repoStartTimes map[string]time.Time
+	repoDoneTimes  map[string]time.Time
+
 	// Cancel support
 	cancelRegistry *CancelRegistry
 	cancelled      map[string]bool
@@ -176,9 +244,14 @@ type progressModel struct {
 	prTitle            string
 	prompt             string
 	originalPrompt     string
+	cursorOnPrompt     bool
 	promptExpanded     bool
 	promptScrollOffset int
-	cursorOnPrompt     bool
+
+	// Bubbles components
+	progressBar progress.Model
+	helpModel   help.Model
+	keys        progressKeyMap
 }
 
 // NewProgressModel creates a new progress model for tracking repository processing.
@@ -192,6 +265,12 @@ func NewProgressModel(repos []string, checkpointInterval int, branchName, prTitl
 	if len(repos) > 0 {
 		cursorRepo = repos[0]
 	}
+	pb := progress.New(progress.WithDefaultGradient(), progress.WithoutPercentage())
+	h := help.New()
+	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colorDim)
+	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(colorDim)
+	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(colorSubtle)
+
 	return progressModel{
 		repos:              repos,
 		statuses:           statuses,
@@ -201,12 +280,17 @@ func NewProgressModel(repos []string, checkpointInterval int, branchName, prTitl
 		checkpointInterval: checkpointInterval,
 		nextCheckpoint:     checkpointInterval,
 		cursorRepo:         cursorRepo,
+		repoStartTimes:     make(map[string]time.Time),
+		repoDoneTimes:      make(map[string]time.Time),
 		cancelled:          make(map[string]bool),
 		approvedPatterns:   make(map[string]bool),
 		branchName:         branchName,
 		prTitle:            prTitle,
 		prompt:             prompt,
 		originalPrompt:     prompt,
+		progressBar:        pb,
+		helpModel:          h,
+		keys:               newProgressKeyMap(),
 	}
 }
 
@@ -226,20 +310,38 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
+		barWidth := m.termWidth - 40
+		if barWidth < 10 {
+			barWidth = 10
+		}
+		m.progressBar.Width = barWidth
+	case progress.FrameMsg:
+		progressModel, cmd := m.progressBar.Update(msg)
+		m.progressBar = progressModel.(progress.Model)
+		return m, cmd
 	case ProjectStatusMsg:
 		m.statuses[msg.Repo] = msg.Status
+		if _, started := m.repoStartTimes[msg.Repo]; !started && msg.Status != "Waiting..." {
+			m.repoStartTimes[msg.Repo] = time.Now()
+		}
 	case ProjectDoneMsg:
 		m.statuses[msg.Repo] = msg.Status
 		m.results[msg.Repo] = msg
+		m.repoDoneTimes[msg.Repo] = time.Now()
 		m.completed++
 		if m.checkpointInterval > 0 && m.completed < m.total && m.completed >= m.nextCheckpoint {
 			m.paused = true
 		}
 	case PostStatusMsg:
 		m.postLines = append(m.postLines, msg.Line)
+	case PostStatusReplaceMsg:
+		if len(m.postLines) > 0 {
+			m.postLines[len(m.postLines)-1] = msg.Line
+		} else {
+			m.postLines = append(m.postLines, msg.Line)
+		}
 	case PromptUpdateMsg:
 		m.prompt = msg.Prompt
-		m.promptScrollOffset = 0
 	case permission.PermissionRequestMsg:
 		return m.handlePermissionRequest(msg.Request)
 	case tickMsg:
@@ -315,10 +417,17 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.promptScrollOffset < maxScroll {
 					m.promptScrollOffset++
 				} else {
+					m.promptExpanded = false
+					m.promptScrollOffset = 0
 					m.moveCursor(1)
 				}
 			} else {
 				m.moveCursor(1)
+			}
+		case "esc":
+			if m.cursorOnPrompt && m.promptExpanded {
+				m.promptExpanded = false
+				m.promptScrollOffset = 0
 			}
 		case "x":
 			if m.cursorOnPrompt {
@@ -355,8 +464,9 @@ func (m *progressModel) moveCursor(delta int) {
 	// Currently on the prompt line
 	if m.cursorOnPrompt {
 		if delta > 0 && len(sorted) > 0 {
-			// Move down into the repo list
 			m.cursorOnPrompt = false
+			m.promptExpanded = false
+			m.promptScrollOffset = 0
 			m.cursorRepo = sorted[0]
 			m.manualScroll = true
 			m.scrollOffset = 0
@@ -380,7 +490,6 @@ func (m *progressModel) moveCursor(delta int) {
 	newIdx := curIdx + delta
 	if newIdx < 0 {
 		if hasPrompt {
-			// Move up past the first repo → land on prompt line
 			m.cursorOnPrompt = true
 			m.cursorRepo = ""
 			return
@@ -616,125 +725,33 @@ func (m progressModel) View() string {
 
 	var b strings.Builder
 
-	// Progress bar
+	// ── Progress bar ──────────────────────────────────────────────
 	elapsed := time.Since(m.startTime)
-	pct := 0
+	pct := 0.0
 	if m.total > 0 {
-		pct = m.completed * 100 / m.total
+		pct = float64(m.completed) / float64(m.total)
 	}
 
-	barWidth := 40
-	if m.termWidth > 80 {
-		barWidth = m.termWidth - 50
-	}
-	if barWidth < 10 {
-		barWidth = 10
-	}
-
-	filled := barWidth * pct / 100
-	empty := barWidth - filled
-
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
-
-	// Time display
-	var timeInfo string
-	if m.completed > 0 {
-		avgPerItem := elapsed / time.Duration(m.completed)
-		remaining := avgPerItem * time.Duration(m.total-m.completed)
-		timeInfo = fmt.Sprintf("%s (remaining: ~%s)", formatDuration(elapsed), formatDuration(remaining))
-	} else {
-		timeInfo = fmt.Sprintf("%s (remaining: --)", formatDuration(elapsed))
-	}
-
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
-	b.WriteString(titleStyle.Render(fmt.Sprintf(
-		"Processing repos %3d%% |%s| (%d/%d) %s",
-		pct, bar, m.completed, m.total, timeInfo)))
+	pctLabel := stAccent.Render(fmt.Sprintf("Processing repos  %3d%%", int(pct*100)))
+	countLabel := stDim.Render(fmt.Sprintf("(%d/%d)", m.completed, m.total))
+	elapsedLabel := stDim.Render(formatDuration(elapsed))
+	b.WriteString(fmt.Sprintf("%s  %s  %s  %s", pctLabel, m.progressBar.ViewAs(pct), countLabel, elapsedLabel))
 	b.WriteString("\n\n")
 
-	// Wizard context (branch, PR title, prompt)
-	dimLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	dimValue := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	// ── Wizard context (branch, PR title) ─────────────────────────
 	if m.branchName != "" || m.prTitle != "" {
 		var parts []string
 		if m.branchName != "" {
-			parts = append(parts, dimLabel.Render("Branch: ")+dimValue.Render(m.branchName))
+			parts = append(parts, stDim.Render("Branch: ")+stText.Render(m.branchName))
 		}
 		if m.prTitle != "" {
-			parts = append(parts, dimLabel.Render("PR: ")+dimValue.Render(m.prTitle))
+			parts = append(parts, stDim.Render("PR: ")+stText.Render(m.prTitle))
 		}
 		b.WriteString("  " + strings.Join(parts, "    "))
-		b.WriteString("\n")
-	}
-	if m.prompt != "" {
-		promptCursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-		promptPrefix := "  "
-		if m.cursorOnPrompt {
-			promptPrefix = promptCursorStyle.Render("▸") + " "
-		}
-
-		if m.promptExpanded {
-			// Expanded: show prompt in a scrollable bordered box
-			btnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-			b.WriteString(promptPrefix + dimLabel.Render("Prompt ") + btnStyle.Render("[▼ collapse]"))
-			b.WriteString("\n")
-
-			boxWidth := m.termWidth - 10
-			if boxWidth < 40 {
-				boxWidth = 40
-			}
-			maxContentWidth := boxWidth - 4
-
-			promptLines := strings.Split(m.prompt, "\n")
-			scrollStart := m.promptScrollOffset
-			scrollEnd := scrollStart + maxPromptBoxLines
-			if scrollEnd > len(promptLines) {
-				scrollEnd = len(promptLines)
-			}
-
-			promptLineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-			var contentLines []string
-			if scrollStart > 0 {
-				contentLines = append(contentLines, dimLabel.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
-			}
-			for _, line := range promptLines[scrollStart:scrollEnd] {
-				if len(line) > maxContentWidth {
-					line = line[:maxContentWidth-3] + "..."
-				}
-				contentLines = append(contentLines, promptLineStyle.Render(line))
-			}
-			if len(promptLines)-scrollEnd > 0 {
-				contentLines = append(contentLines, dimLabel.Render(fmt.Sprintf("  ↓ %d more", len(promptLines)-scrollEnd)))
-			}
-
-			boxStyle := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("238")).
-				Padding(0, 1).
-				Width(boxWidth)
-			rendered := boxStyle.Render(strings.Join(contentLines, "\n"))
-			for _, line := range strings.Split(rendered, "\n") {
-				b.WriteString("    " + line + "\n")
-			}
-		} else {
-			// Collapsed: single line with expand hint
-			maxLen := 80
-			p := m.prompt
-			p = strings.ReplaceAll(p, "\n", " ")
-			if len(p) > maxLen {
-				p = p[:maxLen-3] + "..."
-			}
-			btnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-			btn := btnStyle.Render(" [▶ expand]")
-			b.WriteString(promptPrefix + dimLabel.Render("Prompt: ") + dimValue.Render(p) + btn)
-			b.WriteString("\n")
-		}
-	}
-	if m.branchName != "" || m.prTitle != "" || m.prompt != "" {
-		b.WriteString("\n")
+		b.WriteString("\n\n")
 	}
 
-	// Permission prompt or question prompt (shown between progress bar and project list)
+	// ── Permission / question prompt ──────────────────────────────
 	if m.currentPermission != nil {
 		if m.currentPermission.IsQuestion {
 			b.WriteString(m.renderQuestionPrompt())
@@ -744,116 +761,211 @@ func (m progressModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Pause confirmation
+	// ── Pause confirmation ────────────────────────────────────────
 	if m.paused {
-		pauseStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		pauseStyle := lipgloss.NewStyle().Bold(true).Foreground(colorCancelled)
 		b.WriteString(pauseStyle.Render(fmt.Sprintf(
 			"⏸  Batch complete — %d of %d repos processed.", m.completed, m.total)))
 		b.WriteString("\n")
-		hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		b.WriteString(hintStyle.Render("  💰 Please verify you have sufficient AI credits before continuing with the next batch."))
+		b.WriteString(stDim.Render("  Please verify you have sufficient AI credits before continuing with the next batch."))
 		b.WriteString("\n")
 		if m.pauseEditing {
-			editLabel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+			editLabel := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 			b.WriteString(editLabel.Render("  New Prompt"))
 			b.WriteString("\n")
 			b.WriteString(fmt.Sprintf("    %s", m.pausePromptInput.View()))
 			b.WriteString("\n")
-			b.WriteString(hintStyle.Render("  enter: apply • esc: cancel"))
+			b.WriteString(stDim.Render("  enter: apply • esc: cancel"))
 			b.WriteString("\n")
 		} else {
 			if m.prompt != m.originalPrompt {
-				editedStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("40"))
-				b.WriteString(editedStyle.Render("  ✓ Prompt updated for next batch"))
+				b.WriteString(stDone.Bold(true).Render("  ✓ Prompt updated for next batch"))
 				b.WriteString("\n")
 			}
-			b.WriteString(hintStyle.Render("  Press Enter to continue • e: edit prompt • Ctrl+C to stop."))
+			b.WriteString(stDim.Render("  Press Enter to continue • e: edit prompt • Ctrl+C to stop."))
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}
 
-	// Per-project status lines (sorted by status, with scrolling)
-	sorted := m.sortedRepos()
-	start, end := m.visibleWindow(sorted)
+	// ── Shared spinner ────────────────────────────────────────────
+	spinnerColor := spinnerColors[m.tickCount%len(spinnerColors)]
+	spinnerSt := lipgloss.NewStyle().Foreground(lipgloss.Color(spinnerColor))
+	frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
 
-	if start > 0 {
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
+	// ── Post-processing status lines ──────────────────────────────
+	if len(m.postLines) > 0 {
+		promptCursor := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+		for i, line := range m.postLines {
+			isLast := i == len(m.postLines)-1
+
+			// The completed rewritten question line is navigable
+			isRewritten := strings.HasPrefix(line, "✓ Rewritten question:")
+			if isRewritten && m.cursorOnPrompt {
+				if m.promptExpanded {
+					b.WriteString(promptCursor.Render("v") + " ")
+				} else {
+					b.WriteString(promptCursor.Render(">") + " ")
+				}
+				b.WriteString(stDim.Render(line))
+				if !m.promptExpanded {
+					b.WriteString(" " + stDim.Render("[enter: expand]"))
+				}
+				b.WriteString("\n")
+
+				// Render expanded prompt box
+				if m.promptExpanded {
+					promptLines := strings.Split(m.prompt, "\n")
+					lineCount := len(promptLines)
+
+					boxWidth := m.termWidth - 10
+					if boxWidth < 40 {
+						boxWidth = 40
+					}
+					maxContentWidth := boxWidth - 4
+
+					scrollStart := m.promptScrollOffset
+					scrollEnd := scrollStart + maxPromptBoxLines
+					if scrollEnd > lineCount {
+						scrollEnd = lineCount
+					}
+
+					var contentLines []string
+					if scrollStart > 0 {
+						contentLines = append(contentLines, stDim.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
+					}
+					for _, pl := range promptLines[scrollStart:scrollEnd] {
+						if len(pl) > maxContentWidth {
+							pl = pl[:maxContentWidth-3] + "..."
+						}
+						contentLines = append(contentLines, stText.Render(pl))
+					}
+					if lineCount-scrollEnd > 0 {
+						contentLines = append(contentLines, stDim.Render(fmt.Sprintf("  ↓ %d more", lineCount-scrollEnd)))
+					}
+
+					boxStyle := lipgloss.NewStyle().
+						Border(lipgloss.RoundedBorder()).
+						BorderForeground(colorSubtle).
+						Padding(0, 1).
+						Width(boxWidth)
+					rendered := boxStyle.Render(strings.Join(contentLines, "\n"))
+					for _, bl := range strings.Split(rendered, "\n") {
+						b.WriteString("    " + bl + "\n")
+					}
+				}
+			} else {
+				if isLast && !strings.HasPrefix(line, "✓") && !strings.HasPrefix(line, "⚠") {
+					b.WriteString(spinnerSt.Render(frame) + " ")
+				}
+				b.WriteString(stDim.Render(line))
+				b.WriteString("\n")
+			}
+		}
 		b.WriteString("\n")
 	}
 
-	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	spinnerColor := spinnerColors[m.tickCount%len(spinnerColors)]
-	spinnerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(spinnerColor))
-	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	frame := spinnerFrames[m.tickCount%len(spinnerFrames)]
+	// ── Summary stats line ────────────────────────────────────────
+	summary := buildSummaryStats(m.repos, m.results, m.cancelled, m.statuses)
+	if summary != "" {
+		b.WriteString("  " + summary)
+		b.WriteString("\n\n")
+	}
+
+	// ── Per-project status list (bordered) ────────────────────────
+	sorted := m.sortedRepos()
+	start, end := m.visibleWindow(sorted)
+
+	var repoLines []string
+
+	if start > 0 {
+		repoLines = append(repoLines, stDim.Render(fmt.Sprintf("  ↑ %d more above", start)))
+	}
+
+	cursorMark := lipgloss.NewStyle().Bold(true).Foreground(colorCancelled)
 	for _, repo := range sorted[start:end] {
 		status := m.statuses[repo]
 		isCursor := !m.cursorOnPrompt && repo == m.cursorRepo
 
+		icon, repoSt := repoStatusDisplay(repo, m.results, m.cancelled, m.statuses)
+		repoNameStyled := repoSt.Bold(true).Render(fmt.Sprintf("[%s]", repo))
+
+		// Elapsed time
+		elapsedStr := formatRepoElapsed(repo, m.repoStartTimes, m.repoDoneTimes)
+		elapsedDisplay := ""
+		if elapsedStr != "" {
+			elapsedDisplay = " " + stDim.Render(fmt.Sprintf("(%s)", elapsedStr))
+		}
+
 		prefix := "  "
 		if isCursor {
-			prefix = cursorStyle.Render("▸") + " "
+			prefix = cursorMark.Render("▸") + " "
 		} else if m.statusPriority(repo) == 1 {
-			prefix = spinnerStyle.Render(frame) + " "
+			// In-progress: use animated spinner as icon
+			prefix = spinnerSt.Render(frame) + " "
+		} else if icon != "" {
+			prefix = repoSt.Render(icon) + " "
 		}
-		b.WriteString(fmt.Sprintf("%s%s %s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), status))
+
+		repoLines = append(repoLines, fmt.Sprintf("%s%s %s%s", prefix, repoNameStyled, stText.Render(status), elapsedDisplay))
 	}
 
 	remaining := len(sorted) - end
 	if remaining > 0 {
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		b.WriteString("\n")
+		repoLines = append(repoLines, stDim.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
 	}
 
-	// Post-processing status lines
-	if len(m.postLines) > 0 {
-		b.WriteString("\n")
-		dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-		for i, line := range m.postLines {
-			isLast := i == len(m.postLines)-1
-			// Show spinner on the last line if it looks like an in-progress step
-			if isLast && !strings.HasPrefix(line, "✓") && !strings.HasPrefix(line, "⚠") {
-				b.WriteString(spinnerStyle.Render(frame) + " ")
-			}
-			b.WriteString(dimStyle.Render(line))
-			b.WriteString("\n")
-		}
+	// Wrap repo list in a bordered box
+	// Account for parent dashboard border (2) + padding (2) + this box border (2) + padding (2) = 8
+	boxWidth := m.termWidth - 10
+	if boxWidth < 40 {
+		boxWidth = 40
 	}
-
-	// Help hints
+	repoBoxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSubtle).
+		Padding(0, 1).
+		Width(boxWidth)
+	b.WriteString(repoBoxStyle.Render(strings.Join(repoLines, "\n")))
 	b.WriteString("\n")
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	var hints []string
-	if m.currentPermission != nil && !m.currentPermission.IsQuestion {
-		totalWrapped := m.countWrappedLines()
-		if totalWrapped > maxPermissionCmdLines {
-			hints = append(hints, helpStyle.Render("↑↓: scroll command"))
-		}
-	} else {
-		hints = append(hints, helpStyle.Render("↑↓: navigate"))
-	}
-	if m.cursorOnPrompt {
-		if m.promptExpanded {
-			promptLines := strings.Split(m.prompt, "\n")
-			if len(promptLines) > maxPromptBoxLines {
-				hints = append(hints, helpStyle.Render("↑↓: scroll"))
-			}
-			hints = append(hints, helpStyle.Render("enter: collapse"))
-		} else {
-			hints = append(hints, helpStyle.Render("enter: expand"))
-		}
-	} else if m.cursorRepo != "" && m.isCancellable(m.cursorRepo) {
-		cancelHintStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-		hints = append(hints, cancelHintStyle.Render("x: cancel"))
-	}
-	hints = append(hints, helpStyle.Render("ctrl+c: abort all"))
-	b.WriteString("  " + strings.Join(hints, helpStyle.Render("  •  ")))
+
+	// ── Help bar (bubbles/help) ───────────────────────────────────
+	b.WriteString("\n")
+	m.updateKeyStates()
+	b.WriteString("  " + m.helpModel.View(m.keys))
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+// updateKeyStates enables/disables keys based on current state for the help bar.
+func (m *progressModel) updateKeyStates() {
+	// Reset all optional keys
+	m.keys.Cancel.SetEnabled(false)
+	m.keys.Expand.SetEnabled(false)
+	m.keys.Collapse.SetEnabled(false)
+	m.keys.Scroll.SetEnabled(false)
+	m.keys.Navigate.SetEnabled(true)
+
+	if m.currentPermission != nil && !m.currentPermission.IsQuestion {
+		totalWrapped := m.countWrappedLines()
+		if totalWrapped > maxPermissionCmdLines {
+			m.keys.Scroll.SetEnabled(true)
+			m.keys.Navigate.SetEnabled(false)
+		}
+	} else if m.cursorOnPrompt {
+		if m.promptExpanded {
+			promptLines := strings.Split(m.prompt, "\n")
+			if len(promptLines) > maxPromptBoxLines {
+				m.keys.Scroll.SetEnabled(true)
+			}
+			m.keys.Collapse.SetEnabled(true)
+		} else {
+			m.keys.Expand.SetEnabled(true)
+		}
+	} else if m.cursorRepo != "" && m.isCancellable(m.cursorRepo) {
+		m.keys.Cancel.SetEnabled(true)
+	}
 }
 
 func (m progressModel) renderPermissionPrompt() string {

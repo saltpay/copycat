@@ -116,6 +116,23 @@ func SendAssessmentFindings(projects []config.Project, question string, findings
 	}
 }
 
+// SendAssessmentSummary sends the assessment summary report to a specific Slack channel.
+func SendAssessmentSummary(summary string, channel string, token string, onStatus func(string)) {
+	channel = strings.TrimSpace(channel)
+	if channel == "" || summary == "" {
+		onStatus("⚠  No channel or summary provided, skipping summary notification")
+		return
+	}
+
+	onStatus(fmt.Sprintf("Sending assessment summary to %s...", channel))
+	message := fmt.Sprintf("🐱 *Assessment Summary*\n\n%s", summary)
+	if err := sendMessage(token, channel, message); err != nil {
+		onStatus(fmt.Sprintf("⚠  Failed to send summary to %s: %v", channel, err))
+	} else {
+		onStatus(fmt.Sprintf("✓ Summary sent to %s", channel))
+	}
+}
+
 func formatAssessmentMessage(question string, repoFindings map[string]string) string {
 	var sb strings.Builder
 	sb.WriteString("🐱 *Assessment Results*\n\n")

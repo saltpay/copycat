@@ -228,13 +228,13 @@ Creates GitHub issues across selected repositories and assigns them to @copilot.
 
 **Note:** The Copilot agent does not sign commits, so you'll need to fix unsigned commits before merging.
 
-#### 2. Perform Changes Locally
+#### 2. Perform Changes
 
 Clones repositories, applies changes using your configured AI coding assistant, and creates pull requests.
 
 **Steps:**
 1. Select repositories from the list (or type "all")
-2. Choose "Perform Changes Locally"
+2. Choose "Perform Changes"
 3. Enter PR title (you'll be reminded to include a ticket reference if needed)
 4. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter

@@ -40,6 +40,10 @@ type projectSelectorModel struct {
 	filteredProjects []config.Project
 	// Track if user has manually modified selection in filter mode
 	manualSelection bool
+	// Pre-filter selection backup
+	preFilterSelection map[int]struct{}
+	// Zero selection warning
+	noSelectionWarning bool
 	// Slack room warning after refresh
 	showSlackWarning  bool
 	missingSlackCount int
@@ -99,12 +103,16 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Then clear all locked terms
 					m.filterTerms = nil
 				} else {
-					// Finally exit filter mode
+					// Finally exit filter mode — restore pre-filter selection
 					m.filterMode = false
 					m.manualSelection = false
 					m.appliedTerms = nil
 					m.filteredProjects = m.projects
 					m.cursor = 0
+					if m.preFilterSelection != nil {
+						m.selected = m.preFilterSelection
+						m.preFilterSelection = nil
+					}
 					return m, nil
 				}
 				m.filteredProjects = m.applyAllFilters()
@@ -168,15 +176,18 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 
 			case "f":
-				// Enter filter mode
+				// Enter filter mode — save current selection for restore on cancel
 				m.filterMode = true
 				m.filterText = ""
 				m.filterTerms = nil
 				m.filteredProjects = m.projects
 				m.cursor = 0
-				// Reset manual selection state when entering filter mode
 				m.manualSelection = false
-				// Don't modify the current selection until they start typing
+				// Save current selection so ESC can restore it
+				m.preFilterSelection = make(map[int]struct{}, len(m.selected))
+				for k, v := range m.selected {
+					m.preFilterSelection[k] = v
+				}
 				return m, nil
 
 			case "up", "k":
@@ -208,6 +219,7 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case " ":
+				m.noSelectionWarning = false
 				// Toggle selection (only on filtered projects)
 				if m.filterMode {
 					// In filter mode, toggle the current project selection
@@ -234,6 +246,7 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "a":
+				m.noSelectionWarning = false
 				// Select all visible (filtered) projects when in filter mode
 				if m.filterMode {
 					if m.allFilteredProjectsSelected() {
@@ -268,7 +281,12 @@ func (m projectSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, func() tea.Msg { return projectsRefreshMsg{} }
 
 			case "enter":
-				return m, func() tea.Msg { return projectsConfirmedMsg{Selected: m.extractSelected()} }
+				selected := m.extractSelected()
+				if len(selected) == 0 {
+					m.noSelectionWarning = true
+					return m, nil
+				}
+				return m, func() tea.Msg { return projectsConfirmedMsg{Selected: selected} }
 			}
 		}
 
@@ -294,18 +312,22 @@ func (m projectSelectorModel) filterProjectsByTopic(filterText string) []config.
 	terms := strings.Fields(filterTextLower)
 
 	for _, project := range m.projects {
-		// Check if the project has any of the terms in its topics
+		// Check if the project matches any term via repo name or topics
 		anyTermMatches := false
 		for _, term := range terms {
+			// Match against repo name
+			if strings.Contains(strings.ToLower(project.Repo), term) {
+				anyTermMatches = true
+				break
+			}
 			for _, topic := range project.Topics {
-				// Use strings.Contains to allow partial matches
 				if strings.Contains(strings.ToLower(topic), term) {
 					anyTermMatches = true
 					break
 				}
 			}
 			if anyTermMatches {
-				break // Found a match, no need to check other terms
+				break
 			}
 		}
 
@@ -318,7 +340,7 @@ func (m projectSelectorModel) filterProjectsByTopic(filterText string) []config.
 }
 
 // applyAllFilters combines locked filter terms and current text to filter projects.
-// Each term is OR-matched against topics; projects must match ALL terms (AND between terms).
+// Each term is matched against repo name OR topics; projects must match ALL terms (AND between terms).
 func (m projectSelectorModel) applyAllFilters() []config.Project {
 	allTerms := make([]string, len(m.filterTerms))
 	copy(allTerms, m.filterTerms)
@@ -336,10 +358,17 @@ func (m projectSelectorModel) applyAllFilters() []config.Project {
 		for _, term := range allTerms {
 			termLower := strings.ToLower(term)
 			termMatches := false
-			for _, topic := range project.Topics {
-				if strings.Contains(strings.ToLower(topic), termLower) {
-					termMatches = true
-					break
+			// Match against repo name
+			if strings.Contains(strings.ToLower(project.Repo), termLower) {
+				termMatches = true
+			}
+			// Match against topics
+			if !termMatches {
+				for _, topic := range project.Topics {
+					if strings.Contains(strings.ToLower(topic), termLower) {
+						termMatches = true
+						break
+					}
 				}
 			}
 			if !termMatches {
@@ -512,8 +541,8 @@ func (m projectSelectorModel) View() string {
 		Foreground(lipgloss.Color("206"))
 
 	if m.filterMode {
-		b.WriteString(titleStyle.Render("Filter Projects by Topic"))
-		b.WriteString("\n")
+		b.WriteString(titleStyle.Render("Filter Projects"))
+		b.WriteString(" ")
 		// Render locked filter terms as chips
 		chipStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("255")).
@@ -627,40 +656,42 @@ func (m projectSelectorModel) View() string {
 	}
 
 	// Help text
-	helpStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 0)
-
-	var help string
-	if m.filterMode {
-		help = "Type to filter • enter: lock term • enter (empty): apply • esc: clear • backspace: remove last term • ↑/↓/←/→: navigate • space: toggle • a: toggle all • ctrl+c: quit"
-	} else {
-		help = "f: filter by topic • ↑/↓/←/→: navigate • space: toggle • a: toggle all • r: refresh • enter: confirm • q: quit"
-	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render(help))
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241"))
+
+	if m.filterMode {
+		b.WriteString(helpStyle.Render("type: filter • enter: lock term • enter (empty): apply • esc: clear/exit • space: toggle • a: toggle all • ctrl+c: quit"))
+	} else {
+		b.WriteString(helpStyle.Render("f: filter • ↑/↓/←/→: navigate • space: toggle • a: toggle all • r: refresh • enter: confirm • q: quit"))
+	}
 
 	// Selected count
+	b.WriteString("\n")
 	countStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("40")).
 		Bold(true)
 
 	selectedCount := len(m.selected)
-	countText := fmt.Sprintf("\nSelected: %d project(s)", selectedCount)
-	b.WriteString(countStyle.Render(countText))
-
+	countLine := fmt.Sprintf("Selected: %d project(s)", selectedCount)
 	if len(m.filteredProjects) < len(m.projects) {
-		filterCountText := fmt.Sprintf("\nShowing: %d of %d projects", len(m.filteredProjects), len(m.projects))
-		b.WriteString(countStyle.Render(filterCountText))
+		countLine += fmt.Sprintf("  •  Showing: %d of %d projects", len(m.filteredProjects), len(m.projects))
+	}
+	b.WriteString("\n")
+	b.WriteString(countStyle.Render(countLine))
+
+	if m.noSelectionWarning {
+		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+		b.WriteString("  ")
+		b.WriteString(warnStyle.Render("No projects selected — use space to select"))
 	}
 
-	// Warn about projects without slack rooms
 	missingSlack := m.countMissingSlackRooms()
 	if missingSlack > 0 {
 		warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-		b.WriteString("\n")
+		b.WriteString("  ")
 		b.WriteString(warnStyle.Render(fmt.Sprintf(
-			"⚠ %d project(s) have no slack_room — run 'copycat edit projects' to configure",
+			"⚠ %d no slack_room",
 			missingSlack)))
 	}
 

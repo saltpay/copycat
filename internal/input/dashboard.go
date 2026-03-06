@@ -22,11 +22,15 @@ type dashboardPhase int
 const (
 	phaseProjects dashboardPhase = iota
 	phaseWizard
+	phaseConfirm
 	phaseProcessing
 	phaseDone
 )
 
-const maxLogLines = 10
+const maxLogLines = 20
+const maxSummaryBoxLines = 10
+const maxFindingBoxLines = 10
+const maxConfirmBoxLines = 10
 
 type notifPhaseType int
 
@@ -42,9 +46,10 @@ const notifMaxVisibleRepos = 15
 type notifFocus int
 
 const (
-	notifFocusToken notifFocus = iota // text input for token
-	notifFocusRepos                   // repo checkbox list
-	notifFocusSend                    // send button
+	notifFocusToken       notifFocus = iota // text input for token
+	notifFocusSummaryRoom                   // summary room checkbox + text input (assessment only)
+	notifFocusRepos                         // repo checkbox list
+	notifFocusSend                          // send button
 )
 
 // clipboardFeedbackMsg clears the clipboard feedback after a delay.
@@ -54,6 +59,14 @@ type clipboardFeedbackMsg struct{}
 type slackSendDoneMsg struct {
 	Results []string
 }
+
+// slackStatusMsg carries a progress line during Slack notification sending.
+type slackStatusMsg struct {
+	Line string
+}
+
+// notifTickMsg drives the spinner animation on the notifications tab.
+type notifTickMsg time.Time
 
 // projectsFetchedMsg carries the result of an async project refresh.
 type projectsFetchedMsg struct {
@@ -81,6 +94,8 @@ type DashboardConfig struct {
 	// Slack notification callbacks (invoked from the done screen)
 	SendSlackNotifications      func(projects []config.Project, prTitle string, prURLs map[string]string, token string, onStatus func(string))
 	SendSlackAssessmentFindings func(projects []config.Project, question string, findings map[string]string, token string, onStatus func(string))
+	SendSlackAssessmentSummary  func(summary string, channel string, token string, onStatus func(string))
+	FormatForSlack              func(aiTool *config.AITool, text string) (string, error)
 }
 
 // DashboardResult holds everything the caller needs after the dashboard exits.
@@ -133,8 +148,7 @@ type dashboardModel struct {
 	// Assessment done screen navigation
 	expandedFindingRepo string // which repo's finding is expanded (empty = none)
 	findingScrollOffset int    // scroll offset within the expanded finding box
-	summaryExpanded     bool   // whether the overall summary box is expanded
-	summaryScrollOffset int    // scroll offset within the expanded summary box
+	summaryScrollOffset int    // scroll offset within the summary box
 
 	// Clipboard feedback
 	clipboardFeedback string // transient message shown after copy
@@ -150,6 +164,23 @@ type dashboardModel struct {
 	slackCursor       int             // cursor index into slackRepos
 	notifScrollOffset int             // scroll offset for repo list
 	slackResults      []string
+	slackStatusLines  []string // live progress lines during sending
+	notifTickCount    int      // spinner animation counter
+
+	// Assessment summary Slack room (assessment only)
+	summarySlackEnabled   bool            // whether to send summary to a separate room
+	summarySlackRoomInput textinput.Model // text input for the room name
+
+	// Slack send confirmation
+	notifConfirming bool // true when showing "are you sure?" before sending
+
+	// Done screen status filter
+	doneStatusFilter string // "" = all, "succeeded", "failed", "skipped"
+
+	// Confirm screen navigation
+	confirmCursor       int    // which row is highlighted
+	confirmExpanded     string // which item key is expanded ("projects", "prompt", or "")
+	confirmScrollOffset int    // scroll offset within expanded box
 }
 
 func newDashboardModel(cfg DashboardConfig) dashboardModel {
@@ -195,6 +226,8 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateProjects(msg)
 	case phaseWizard:
 		return m.updateWizard(msg)
+	case phaseConfirm:
+		return m.updateConfirm(msg)
 	case phaseProcessing:
 		return m.updateProcessing(msg)
 	case phaseDone:
@@ -251,7 +284,15 @@ func (m dashboardModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case wizardCompletedMsg:
 		m.wizardResult = &msg.Result
-		return m.startProcessing()
+		m.phase = phaseConfirm
+		m.confirmCursor = 0
+		m.confirmExpanded = ""
+		m.confirmScrollOffset = 0
+		return m, nil
+
+	case wizardBackMsg:
+		m.phase = phaseProjects
+		return m, m.projects.Init()
 
 	case editorRequestedMsg:
 		return m, m.openEditor()
@@ -268,7 +309,11 @@ func (m dashboardModel) updateWizard(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		result := m.wizard.buildResult()
 		m.wizardResult = &result
-		return m.startProcessing()
+		m.phase = phaseConfirm
+		m.confirmCursor = 0
+		m.confirmExpanded = ""
+		m.confirmScrollOffset = 0
+		return m, nil
 	}
 
 	updated, cmd := m.wizard.Update(msg)
@@ -303,6 +348,262 @@ func (m dashboardModel) openEditor() tea.Cmd {
 		}
 		return editorFinishedMsg{Content: strings.TrimSpace(string(content))}
 	})
+}
+
+// confirmItem describes one row in the confirm screen.
+type confirmItem struct {
+	key    string // unique key: "projects", "action", "ai_tool", "branch", "branch_name", "pr_title", "prompt", "ignore"
+	label  string
+	value  string // short display value
+	detail string // full content for scrollable box (empty = not expandable)
+}
+
+func (m dashboardModel) buildConfirmItems() []confirmItem {
+	var items []confirmItem
+
+	// Projects (expandable)
+	names := make([]string, 0, len(m.selectedProjects))
+	for _, p := range m.selectedProjects {
+		names = append(names, p.Repo)
+	}
+	items = append(items, confirmItem{
+		key:    "projects",
+		label:  "Projects",
+		value:  fmt.Sprintf("%d selected", len(m.selectedProjects)),
+		detail: strings.Join(names, "\n"),
+	})
+
+	// AI Tool
+	if m.wizardResult.AITool != nil {
+		items = append(items, confirmItem{key: "ai_tool", label: "AI Tool", value: m.wizardResult.AITool.Name})
+	}
+
+	// Local-only fields
+	if m.wizardResult.Action == "local" {
+		if m.wizardResult.BranchStrategy != "" {
+			items = append(items, confirmItem{key: "branch", label: "Branch", value: m.wizardResult.BranchStrategy})
+		}
+		if m.wizardResult.BranchName != "" {
+			items = append(items, confirmItem{key: "branch_name", label: "Branch Name", value: m.wizardResult.BranchName})
+		}
+		if m.wizardResult.PRTitle != "" {
+			items = append(items, confirmItem{key: "pr_title", label: "PR Title", value: m.wizardResult.PRTitle})
+		}
+	}
+
+	// Prompt (expandable)
+	promptLabel := "Prompt"
+	if m.wizardResult.Action == "assessment" {
+		promptLabel = "Question"
+	}
+	prompt := m.wizardResult.Prompt
+	shortPrompt := strings.ReplaceAll(prompt, "\n", " ")
+	if len(shortPrompt) > 80 {
+		shortPrompt = shortPrompt[:77] + "..."
+	}
+	detail := ""
+	if len(prompt) > 80 || strings.Contains(prompt, "\n") {
+		detail = prompt
+	}
+	items = append(items, confirmItem{key: "prompt", label: promptLabel, value: shortPrompt, detail: detail})
+
+	// Ignore instructions
+	if m.wizardResult.IgnoreAgentInstructions {
+		items = append(items, confirmItem{key: "ignore", label: "Ignore Agent Instructions", value: "Yes"})
+	}
+
+	// Start button (always last)
+	startLabel := "Start"
+	if m.wizardResult.Action == "assessment" {
+		startLabel = "Start Assessment"
+	}
+	items = append(items, confirmItem{key: "start", label: startLabel})
+
+	return items
+}
+
+func (m dashboardModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	items := m.buildConfirmItems()
+
+	// If a box is expanded, handle scroll/close
+	if m.confirmExpanded != "" {
+		switch keyMsg.String() {
+		case "esc", "enter", "q":
+			m.confirmExpanded = ""
+			m.confirmScrollOffset = 0
+		case "up", "k":
+			if m.confirmScrollOffset > 0 {
+				m.confirmScrollOffset--
+			}
+		case "down", "j":
+			// Find expanded item detail
+			for _, item := range items {
+				if item.key == m.confirmExpanded {
+					lines := strings.Split(item.detail, "\n")
+					maxScroll := len(lines) - maxConfirmBoxLines
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					if m.confirmScrollOffset < maxScroll {
+						m.confirmScrollOffset++
+					}
+					break
+				}
+			}
+		}
+		return m, nil
+	}
+
+	switch keyMsg.String() {
+	case "enter":
+		if m.confirmCursor >= 0 && m.confirmCursor < len(items) {
+			item := items[m.confirmCursor]
+			if item.key == "start" {
+				return m.startProcessing()
+			}
+			if item.detail != "" {
+				m.confirmExpanded = item.key
+				m.confirmScrollOffset = 0
+				return m, nil
+			}
+		}
+	case "up", "k":
+		if m.confirmCursor > 0 {
+			m.confirmCursor--
+		}
+	case "down", "j":
+		if m.confirmCursor < len(items)-1 {
+			m.confirmCursor++
+		}
+	case "esc", "b":
+		m.confirmCursor = 0
+		m.phase = phaseWizard
+		return m, nil
+	case "q":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m dashboardModel) renderConfirmView() string {
+	var b strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("206"))
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	btnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("206")).Padding(0, 2)
+	btnDimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("240")).Padding(0, 2)
+
+	b.WriteString(titleStyle.Render("Confirm & Run"))
+	b.WriteString("\n\n")
+
+	items := m.buildConfirmItems()
+
+	for i, item := range items {
+		selected := i == m.confirmCursor && m.confirmExpanded == ""
+
+		// Start button gets special rendering
+		if item.key == "start" {
+			b.WriteString("\n")
+			if selected {
+				b.WriteString(fmt.Sprintf("  %s %s\n", cursorStyle.Render("▸"), btnStyle.Render(item.label)))
+			} else {
+				b.WriteString(fmt.Sprintf("    %s\n", btnDimStyle.Render(item.label)))
+			}
+			continue
+		}
+
+		expandable := item.detail != ""
+
+		// Cursor prefix
+		expanded := m.confirmExpanded == item.key
+		prefix := "  "
+		if expanded {
+			prefix = cursorStyle.Render("v ")
+		} else if selected {
+			prefix = cursorStyle.Render("> ")
+		}
+
+		// Expandable hint
+		hint := ""
+		if expandable && selected {
+			hint = " " + dimStyle.Render("[enter: expand]")
+		}
+
+		b.WriteString(fmt.Sprintf("  %s%s %s%s\n",
+			prefix,
+			labelStyle.Render(item.label+":"),
+			valueStyle.Render(item.value),
+			hint,
+		))
+
+		// Render expanded box if this item is expanded
+		if m.confirmExpanded == item.key {
+			m.renderConfirmBox(&b, item.detail)
+		}
+	}
+
+	b.WriteString("\n")
+	if m.confirmExpanded != "" {
+		b.WriteString(helpStyle.Render("  up/down: scroll • esc/enter: close"))
+	} else {
+		b.WriteString(helpStyle.Render("  up/down: navigate • enter: select • esc/b: back • q: quit"))
+	}
+	b.WriteString("\n")
+
+	return b.String()
+}
+
+func (m dashboardModel) renderConfirmBox(b *strings.Builder, content string) {
+	lines := strings.Split(content, "\n")
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+
+	boxWidth := m.termWidth - 12
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	maxContentWidth := boxWidth - 4
+
+	scrollStart := m.confirmScrollOffset
+	scrollEnd := scrollStart + maxConfirmBoxLines
+	if scrollEnd > len(lines) {
+		scrollEnd = len(lines)
+	}
+
+	var contentLines []string
+	if scrollStart > 0 {
+		contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
+	}
+	for _, line := range lines[scrollStart:scrollEnd] {
+		if len(line) > maxContentWidth {
+			line = line[:maxContentWidth-3] + "..."
+		}
+		contentLines = append(contentLines, lineStyle.Render(line))
+	}
+	remaining := len(lines) - scrollEnd
+	if remaining > 0 {
+		contentLines = append(contentLines, dimStyle.Render(fmt.Sprintf("  ↓ %d more", remaining)))
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("238")).
+		Padding(0, 1).
+		Width(boxWidth)
+
+	rendered := boxStyle.Render(strings.Join(contentLines, "\n"))
+	for _, boxLine := range strings.Split(rendered, "\n") {
+		b.WriteString("      " + boxLine + "\n")
+	}
 }
 
 func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
@@ -412,7 +713,7 @@ func (m dashboardModel) updateProcessing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Pump status channel messages
 	var cmds []tea.Cmd
 	switch msg.(type) {
-	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, AssessmentResultMsg, PromptUpdateMsg:
+	case ProjectStatusMsg, ProjectDoneMsg, permission.PermissionRequestMsg, PostStatusMsg, PostStatusReplaceMsg, AssessmentResultMsg, PromptUpdateMsg:
 		cmds = append(cmds, listenForStatus(m.statusCh))
 	}
 
@@ -471,6 +772,12 @@ func (m dashboardModel) isNotifTab() bool {
 	return m.activeTab == m.doneTabCount()-1
 }
 
+func (m dashboardModel) notifTickCmd() tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+		return notifTickMsg(t)
+	})
+}
+
 func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle clipboard feedback clear
 	if _, ok := msg.(clipboardFeedbackMsg); ok {
@@ -478,15 +785,32 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle notification spinner tick
+	if _, ok := msg.(notifTickMsg); ok {
+		if m.notifPhase == notifPhaseSending {
+			m.notifTickCount++
+			return m, m.notifTickCmd()
+		}
+		return m, nil
+	}
+
+	// Handle Slack progress line during sending
+	if statusMsg, ok := msg.(slackStatusMsg); ok {
+		m.slackStatusLines = append(m.slackStatusLines, statusMsg.Line)
+		return m, listenForStatus(m.statusCh)
+	}
+
 	// Handle Slack send done message (works for any tab)
 	if slackDone, ok := msg.(slackSendDoneMsg); ok {
 		m.notifPhase = notifPhaseDone
 		m.slackResults = slackDone.Results
+		m.slackStatusLines = nil
 		return m, nil
 	}
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		tokenInputFocused := m.isNotifTab() && m.notifFocus == notifFocusToken && m.slackTokenInput.Focused()
+		tokenInputFocused := m.isNotifTab() && ((m.notifFocus == notifFocusToken && m.slackTokenInput.Focused()) ||
+			(m.notifFocus == notifFocusSummaryRoom && m.summarySlackEnabled && m.summarySlackRoomInput.Focused()))
 
 		// Global keys
 		switch keyMsg.String() {
@@ -502,9 +826,14 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 		tabCount := m.doneTabCount()
 		switchTab := func(newTab int) {
 			m.slackTokenInput.Blur()
+			m.summarySlackRoomInput.Blur()
 			m.activeTab = newTab
-			if m.activeTab == tabCount-1 && m.notifPhase == notifPhaseReady && m.notifFocus == notifFocusToken {
-				m.slackTokenInput.Focus()
+			if m.activeTab == tabCount-1 && m.notifPhase == notifPhaseReady {
+				if m.notifFocus == notifFocusToken {
+					m.slackTokenInput.Focus()
+				} else if m.notifFocus == notifFocusSummaryRoom && m.summarySlackEnabled {
+					m.summarySlackRoomInput.Focus()
+				}
 			}
 		}
 		switch keyMsg.String() {
@@ -554,6 +883,12 @@ func (m dashboardModel) updateDone(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.slackTokenInput, cmd = m.slackTokenInput.Update(msg)
 		return m, cmd
 	}
+	// Forward text input updates for summary room entry
+	if m.isNotifTab() && m.notifFocus == notifFocusSummaryRoom && m.summarySlackEnabled {
+		var cmd tea.Cmd
+		m.summarySlackRoomInput, cmd = m.summarySlackRoomInput.Update(msg)
+		return m, cmd
+	}
 
 	return m, nil
 }
@@ -563,7 +898,7 @@ func (m dashboardModel) updateDoneResultsTab(keyMsg tea.KeyMsg) (tea.Model, tea.
 	// When a log is expanded, handle inner navigation
 	if m.expandedLogRepo != "" {
 		switch keyMsg.String() {
-		case "enter", "l", "esc":
+		case "enter", "l", "esc", "h":
 			m.expandedLogRepo = ""
 			m.logScrollOffset = 0
 			return m, nil
@@ -585,11 +920,39 @@ func (m dashboardModel) updateDoneResultsTab(keyMsg tea.KeyMsg) (tea.Model, tea.
 				}
 			}
 			return m, nil
+		case "ctrl+u", "pgup":
+			m.logScrollOffset -= maxLogLines / 2
+			if m.logScrollOffset < 0 {
+				m.logScrollOffset = 0
+			}
+			return m, nil
+		case "ctrl+d", "pgdown":
+			results := m.doneResults()
+			if result, ok := results[m.expandedLogRepo]; ok {
+				lines := aiOutputLines(result.AIOutput)
+				maxScroll := len(lines) - maxLogLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				m.logScrollOffset += maxLogLines / 2
+				if m.logScrollOffset > maxScroll {
+					m.logScrollOffset = maxScroll
+				}
+			}
+			return m, nil
 		}
 		return m, nil
 	}
 
 	switch keyMsg.String() {
+	case "c":
+		text := m.buildLocalReport()
+		if err := clipboard.WriteAll(text); err != nil {
+			m.clipboardFeedback = "Failed to copy"
+		} else {
+			m.clipboardFeedback = "Copied to clipboard"
+		}
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clipboardFeedbackMsg{} })
 	case "enter", "l":
 		if m.doneCursorRepo != "" {
 			results := m.doneResults()
@@ -623,6 +986,25 @@ func (m dashboardModel) updateDoneResultsTab(keyMsg tea.KeyMsg) (tea.Model, tea.
 		}
 		m.selectedProjects = retryProjects
 		return m.startProcessing()
+	case "s":
+		switch m.doneStatusFilter {
+		case "":
+			m.doneStatusFilter = "succeeded"
+		case "succeeded":
+			m.doneStatusFilter = "failed"
+		case "failed":
+			m.doneStatusFilter = "skipped"
+		case "skipped":
+			m.doneStatusFilter = ""
+		}
+		m.doneScrollOffset = 0
+		repos := m.doneVisibleRepos()
+		if len(repos) > 0 {
+			m.doneCursorRepo = repos[0]
+		} else {
+			m.doneCursorRepo = ""
+		}
+		return m, nil
 	case "up", "k":
 		m = m.moveDoneCursor(-1)
 	case "down", "j":
@@ -635,30 +1017,6 @@ func (m dashboardModel) updateDoneResultsTab(keyMsg tea.KeyMsg) (tea.Model, tea.
 func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Summary tab (tab 0)
 	if m.activeTab == 0 {
-		if m.summaryExpanded {
-			switch keyMsg.String() {
-			case "enter", "l", "esc":
-				m.summaryExpanded = false
-				m.summaryScrollOffset = 0
-				return m, nil
-			case "up", "k":
-				if m.summaryScrollOffset > 0 {
-					m.summaryScrollOffset--
-				}
-				return m, nil
-			case "down", "j":
-				lines := strings.Split(m.assessmentSummary, "\n")
-				maxScroll := len(lines) - maxLogLines
-				if maxScroll < 0 {
-					maxScroll = 0
-				}
-				if m.summaryScrollOffset < maxScroll {
-					m.summaryScrollOffset++
-				}
-				return m, nil
-			}
-			return m, nil
-		}
 		switch keyMsg.String() {
 		case "c":
 			text := m.buildAssessmentReport()
@@ -668,11 +1026,36 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 				m.clipboardFeedback = "✓ Copied to clipboard"
 			}
 			return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clipboardFeedbackMsg{} })
-		case "enter", "l":
-			summaryLines := strings.Split(m.assessmentSummary, "\n")
-			if len(summaryLines) > maxLogLines {
-				m.summaryExpanded = true
+		case "up", "k":
+			if m.summaryScrollOffset > 0 {
+				m.summaryScrollOffset--
+			}
+			return m, nil
+		case "down", "j":
+			lines := strings.Split(m.assessmentSummary, "\n")
+			maxScroll := len(lines) - maxSummaryBoxLines
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.summaryScrollOffset < maxScroll {
+				m.summaryScrollOffset++
+			}
+			return m, nil
+		case "ctrl+u", "pgup":
+			m.summaryScrollOffset -= maxSummaryBoxLines / 2
+			if m.summaryScrollOffset < 0 {
 				m.summaryScrollOffset = 0
+			}
+			return m, nil
+		case "ctrl+d", "pgdown":
+			lines := strings.Split(m.assessmentSummary, "\n")
+			maxScroll := len(lines) - maxSummaryBoxLines
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			m.summaryScrollOffset += maxSummaryBoxLines / 2
+			if m.summaryScrollOffset > maxScroll {
+				m.summaryScrollOffset = maxScroll
 			}
 			return m, nil
 		}
@@ -682,7 +1065,7 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 	// Projects tab (tab 1)
 	if m.expandedFindingRepo != "" {
 		switch keyMsg.String() {
-		case "enter", "l", "esc":
+		case "enter", "l", "esc", "h":
 			m.expandedFindingRepo = ""
 			m.findingScrollOffset = 0
 			return m, nil
@@ -695,12 +1078,32 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 			finding := m.assessmentFindings[m.expandedFindingRepo]
 			if finding != "" {
 				lines := strings.Split(strings.TrimSpace(finding), "\n")
-				maxScroll := len(lines) - maxLogLines
+				maxScroll := len(lines) - maxFindingBoxLines
 				if maxScroll < 0 {
 					maxScroll = 0
 				}
 				if m.findingScrollOffset < maxScroll {
 					m.findingScrollOffset++
+				}
+			}
+			return m, nil
+		case "ctrl+u", "pgup":
+			m.findingScrollOffset -= maxFindingBoxLines / 2
+			if m.findingScrollOffset < 0 {
+				m.findingScrollOffset = 0
+			}
+			return m, nil
+		case "ctrl+d", "pgdown":
+			finding := m.assessmentFindings[m.expandedFindingRepo]
+			if finding != "" {
+				lines := strings.Split(strings.TrimSpace(finding), "\n")
+				maxScroll := len(lines) - maxFindingBoxLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				m.findingScrollOffset += maxFindingBoxLines / 2
+				if m.findingScrollOffset > maxScroll {
+					m.findingScrollOffset = maxScroll
 				}
 			}
 			return m, nil
@@ -748,6 +1151,30 @@ func (m dashboardModel) updateDoneAssessmentTab(keyMsg tea.KeyMsg) (tea.Model, t
 	return m, nil
 }
 
+// isAssessmentMode returns true when the current workflow is an assessment.
+func (m dashboardModel) isAssessmentMode() bool {
+	return m.wizardResult != nil && m.wizardResult.Action == "assessment"
+}
+
+// notifFocusAfterToken returns the next focus element after the token input.
+func (m dashboardModel) notifFocusAfterToken() notifFocus {
+	if m.isAssessmentMode() && m.assessmentSummary != "" {
+		return notifFocusSummaryRoom
+	}
+	if len(m.slackRepos) > 0 {
+		return notifFocusRepos
+	}
+	return notifFocusSend
+}
+
+// notifFocusBeforeRepos returns the focus element before the repo list.
+func (m dashboardModel) notifFocusBeforeRepos() notifFocus {
+	if m.isAssessmentMode() && m.assessmentSummary != "" {
+		return notifFocusSummaryRoom
+	}
+	return notifFocusToken
+}
+
 // updateDoneNotifTab handles keys on the Notifications tab.
 func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.notifPhase {
@@ -755,10 +1182,27 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 		switch m.notifFocus {
 		case notifFocusToken:
 			switch keyMsg.Type {
-			case tea.KeyEnter:
-				// Move focus to repos (or send if no repos)
+			case tea.KeyEnter, tea.KeyDown:
 				m.slackToken = strings.TrimSpace(m.slackTokenInput.Value())
 				m.slackTokenInput.Blur()
+				next := m.notifFocusAfterToken()
+				m.notifFocus = next
+				if next == notifFocusSummaryRoom {
+					m.summarySlackRoomInput.Focus()
+				} else if next == notifFocusRepos {
+					m.slackCursor = 0
+				}
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.slackTokenInput, cmd = m.slackTokenInput.Update(keyMsg)
+			return m, cmd
+
+		case notifFocusSummaryRoom:
+			// Navigation keys always work regardless of input state
+			switch keyMsg.Type {
+			case tea.KeyEnter:
+				m.summarySlackRoomInput.Blur()
 				if len(m.slackRepos) > 0 {
 					m.notifFocus = notifFocusRepos
 					m.slackCursor = 0
@@ -767,8 +1211,7 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 				}
 				return m, nil
 			case tea.KeyDown:
-				m.slackToken = strings.TrimSpace(m.slackTokenInput.Value())
-				m.slackTokenInput.Blur()
+				m.summarySlackRoomInput.Blur()
 				if len(m.slackRepos) > 0 {
 					m.notifFocus = notifFocusRepos
 					m.slackCursor = 0
@@ -776,10 +1219,44 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 					m.notifFocus = notifFocusSend
 				}
 				return m, nil
+			case tea.KeyUp:
+				m.summarySlackRoomInput.Blur()
+				m.notifFocus = notifFocusToken
+				m.slackTokenInput.Focus()
+				return m, nil
 			}
-			var cmd tea.Cmd
-			m.slackTokenInput, cmd = m.slackTokenInput.Update(keyMsg)
-			return m, cmd
+
+			// When enabled and input is focused, forward keys to text input
+			if m.summarySlackEnabled && m.summarySlackRoomInput.Focused() {
+				// Space on empty input unchecks the checkbox
+				if keyMsg.String() == " " && strings.TrimSpace(m.summarySlackRoomInput.Value()) == "" {
+					m.summarySlackEnabled = false
+					m.summarySlackRoomInput.Blur()
+					return m, nil
+				}
+				var cmd tea.Cmd
+				m.summarySlackRoomInput, cmd = m.summarySlackRoomInput.Update(keyMsg)
+				return m, cmd
+			}
+
+			// Checkbox is not checked — space toggles it on
+			if keyMsg.String() == " " {
+				m.summarySlackEnabled = !m.summarySlackEnabled
+				if m.summarySlackEnabled {
+					m.summarySlackRoomInput.Focus()
+				}
+				return m, nil
+			}
+			// Starting to type a letter enables the checkbox and begins input
+			ch := keyMsg.String()
+			if len(ch) == 1 && ((ch[0] >= 'a' && ch[0] <= 'z') || (ch[0] >= 'A' && ch[0] <= 'Z')) {
+				m.summarySlackEnabled = true
+				m.summarySlackRoomInput.Focus()
+				var cmd tea.Cmd
+				m.summarySlackRoomInput, cmd = m.summarySlackRoomInput.Update(keyMsg)
+				return m, cmd
+			}
+			return m, nil
 
 		case notifFocusRepos:
 			switch keyMsg.String() {
@@ -787,9 +1264,15 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 				if m.slackCursor > 0 {
 					m.slackCursor--
 				} else {
-					// Move focus back to token input
-					m.notifFocus = notifFocusToken
-					m.slackTokenInput.Focus()
+					prev := m.notifFocusBeforeRepos()
+					m.notifFocus = prev
+					if prev == notifFocusSummaryRoom {
+						if m.summarySlackEnabled {
+							m.summarySlackRoomInput.Focus()
+						}
+					} else {
+						m.slackTokenInput.Focus()
+					}
 				}
 			case "down", "j":
 				if m.slackCursor < len(m.slackRepos)-1 {
@@ -820,17 +1303,27 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 		case notifFocusSend:
 			switch keyMsg.String() {
 			case "up", "k":
+				if m.notifConfirming {
+					return m, nil
+				}
 				if len(m.slackRepos) > 0 {
 					m.notifFocus = notifFocusRepos
 					m.slackCursor = len(m.slackRepos) - 1
+				} else if m.isAssessmentMode() && m.assessmentSummary != "" {
+					m.notifFocus = notifFocusSummaryRoom
+					m.summarySlackRoomInput.Focus()
 				} else {
 					m.notifFocus = notifFocusToken
 					m.slackTokenInput.Focus()
 				}
+			case "esc":
+				if m.notifConfirming {
+					m.notifConfirming = false
+					return m, nil
+				}
 			case "enter":
 				token := strings.TrimSpace(m.slackTokenInput.Value())
 				if token == "" {
-					// Focus back on token input if empty
 					m.notifFocus = notifFocusToken
 					m.slackTokenInput.Focus()
 					return m, nil
@@ -843,7 +1336,12 @@ func (m dashboardModel) updateDoneNotifTab(keyMsg tea.KeyMsg) (tea.Model, tea.Cm
 						break
 					}
 				}
-				if hasSelected {
+				if hasSelected || m.summarySlackEnabled {
+					if !m.notifConfirming {
+						m.notifConfirming = true
+						return m, nil
+					}
+					m.notifConfirming = false
 					return m.sendSlackNotifications()
 				}
 			}
@@ -878,13 +1376,58 @@ func (m dashboardModel) sendSlackNotifications() (tea.Model, tea.Cmd) {
 		question := m.wizardResult.Prompt
 		findings := m.assessmentFindings
 		sendFn := m.cfg.SendSlackAssessmentFindings
+		sendSummaryFn := m.cfg.SendSlackAssessmentSummary
+		formatFn := m.cfg.FormatForSlack
+		aiTool := m.wizardResult.AITool
+		summaryEnabled := m.summarySlackEnabled
+		summaryRoom := strings.TrimSpace(m.summarySlackRoomInput.Value())
+		summary := m.assessmentSummary
 
 		go func() {
 			var results []string
-			if sendFn != nil {
-				sendFn(sendProjects, question, findings, token, func(line string) {
-					results = append(results, line)
-				})
+			status := func(line string) {
+				ch <- slackStatusMsg{Line: line}
+				results = append(results, line)
+			}
+
+			// Format findings for Slack (only for selected repos)
+			formattedFindings := make(map[string]string, len(sendProjects))
+			for _, p := range sendProjects {
+				if finding, ok := findings[p.Repo]; ok {
+					formattedFindings[p.Repo] = finding
+				}
+			}
+			if formatFn != nil && aiTool != nil && len(formattedFindings) > 0 {
+				status("Formatting findings for Slack...")
+				for _, p := range sendProjects {
+					finding, ok := formattedFindings[p.Repo]
+					if !ok {
+						continue
+					}
+					if formatted, err := formatFn(aiTool, finding); err == nil {
+						formattedFindings[p.Repo] = formatted
+						status(fmt.Sprintf("✓ Formatted %s", p.Repo))
+					} else {
+						status(fmt.Sprintf("⚠  Failed to format %s, using original: %v", p.Repo, err))
+					}
+				}
+			}
+
+			if sendFn != nil && len(sendProjects) > 0 {
+				sendFn(sendProjects, question, formattedFindings, token, status)
+			}
+			if summaryEnabled && summaryRoom != "" && sendSummaryFn != nil {
+				formattedSummary := summary
+				if formatFn != nil && aiTool != nil {
+					status("Formatting summary for Slack...")
+					if formatted, err := formatFn(aiTool, summary); err == nil {
+						formattedSummary = formatted
+						status("✓ Summary formatted")
+					} else {
+						status(fmt.Sprintf("⚠  Failed to format summary, using original: %v", err))
+					}
+				}
+				sendSummaryFn(formattedSummary, summaryRoom, token, status)
 			}
 			ch <- slackSendDoneMsg{Results: results}
 		}()
@@ -910,7 +1453,7 @@ func (m dashboardModel) sendSlackNotifications() (tea.Model, tea.Cmd) {
 		}()
 	}
 
-	return m, listenForStatus(m.statusCh)
+	return m, tea.Batch(listenForStatus(m.statusCh), m.notifTickCmd())
 }
 
 func (m dashboardModel) initDoneScreen() dashboardModel {
@@ -920,9 +1463,9 @@ func (m dashboardModel) initDoneScreen() dashboardModel {
 	m.logScrollOffset = 0
 	m.expandedFindingRepo = ""
 	m.findingScrollOffset = 0
-	m.summaryExpanded = false
 	m.summaryScrollOffset = 0
 	m.slackResults = nil
+	m.slackStatusLines = nil
 
 	repos := m.doneVisibleRepos()
 	if m.wizardResult != nil && m.wizardResult.Action == "assessment" && m.assessmentSummary != "" {
@@ -954,6 +1497,7 @@ func (m dashboardModel) initDoneScreen() dashboardModel {
 	tokenInput.Placeholder = "xoxb-..."
 	tokenInput.CharLimit = 512
 	tokenInput.Width = 60
+	tokenInput.EchoMode = textinput.EchoPassword
 	m.notifPhase = notifPhaseReady
 	if envToken := os.Getenv("SLACK_BOT_TOKEN"); envToken != "" {
 		tokenInput.SetValue(envToken)
@@ -965,6 +1509,14 @@ func (m dashboardModel) initDoneScreen() dashboardModel {
 		m.notifFocus = notifFocusToken
 	}
 	m.slackTokenInput = tokenInput
+
+	// Initialize summary room input (assessment only)
+	summaryRoomInput := textinput.New()
+	summaryRoomInput.Placeholder = "#channel-name"
+	summaryRoomInput.CharLimit = 100
+	summaryRoomInput.Width = 40
+	m.summarySlackEnabled = false
+	m.summarySlackRoomInput = summaryRoomInput
 
 	return m
 }
@@ -978,14 +1530,30 @@ func (m dashboardModel) doneResults() map[string]ProjectDoneMsg {
 	return results
 }
 
-// doneVisibleRepos returns the list of repos that have results.
+// doneVisibleRepos returns the list of repos that have results, filtered by doneStatusFilter.
 func (m dashboardModel) doneVisibleRepos() []string {
 	results := m.doneResults()
 	var repos []string
 	for _, repo := range m.progress.repos {
-		if _, ok := results[repo]; ok {
-			repos = append(repos, repo)
+		result, ok := results[repo]
+		if !ok {
+			continue
 		}
+		switch m.doneStatusFilter {
+		case "succeeded":
+			if !result.Success {
+				continue
+			}
+		case "failed":
+			if result.Success || result.Skipped {
+				continue
+			}
+		case "skipped":
+			if !result.Skipped {
+				continue
+			}
+		}
+		repos = append(repos, repo)
 	}
 	return repos
 }
@@ -1066,15 +1634,15 @@ func (m dashboardModel) assessDoneMaxVisibleRepos() int {
 		if finding != "" {
 			lines := strings.Split(strings.TrimSpace(finding), "\n")
 			boxLines := len(lines)
-			if boxLines > maxLogLines {
-				boxLines = maxLogLines
+			if boxLines > maxFindingBoxLines {
+				boxLines = maxFindingBoxLines
 			}
 			boxLines += 2 // border top + bottom
-			if len(lines) > maxLogLines {
+			if len(lines) > maxFindingBoxLines {
 				if m.findingScrollOffset > 0 {
 					boxLines++
 				}
-				if m.findingScrollOffset+maxLogLines < len(lines) {
+				if m.findingScrollOffset+maxFindingBoxLines < len(lines) {
 					boxLines++
 				}
 			}
@@ -1139,6 +1707,8 @@ func (m dashboardModel) View() string {
 		content = m.projects.View()
 	case phaseWizard:
 		content = m.wizard.View()
+	case phaseConfirm:
+		content = m.renderConfirmView()
 	case phaseProcessing:
 		content = m.progress.View()
 	case phaseDone:
@@ -1157,7 +1727,38 @@ func (m dashboardModel) View() string {
 		Padding(0, 1).
 		Width(borderWidth)
 
-	return banner + "\n" + borderStyle.Render(content)
+	// Phase indicator
+	phaseIndicator := m.renderPhaseIndicator()
+
+	return banner + "\n" + phaseIndicator + borderStyle.Render(content)
+}
+
+// renderPhaseIndicator renders a breadcrumb showing the current workflow phase.
+func (m dashboardModel) renderPhaseIndicator() string {
+	type phaseLabel struct {
+		name  string
+		phase dashboardPhase
+	}
+	phases := []phaseLabel{
+		{"Projects", phaseProjects},
+		{"Wizard", phaseWizard},
+		{"Confirm", phaseConfirm},
+		{"Processing", phaseProcessing},
+		{"Done", phaseDone},
+	}
+
+	sep := stDim.Render(" > ")
+	var parts []string
+	for _, p := range phases {
+		if p.phase == m.phase {
+			parts = append(parts, stAccent.Render(p.name))
+		} else if p.phase < m.phase {
+			parts = append(parts, stDone.Render(p.name))
+		} else {
+			parts = append(parts, stDim.Render(p.name))
+		}
+	}
+	return " " + strings.Join(parts, sep) + "\n"
 }
 
 // renderTabBar renders the tab bar for the done screen.
@@ -1197,7 +1798,7 @@ func (m dashboardModel) renderDoneSummary() string {
 		feedbackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("40"))
 		b.WriteString("  " + feedbackStyle.Render(m.clipboardFeedback))
 	}
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 
 	// Tab bar
 	b.WriteString(m.renderTabBar())
@@ -1267,6 +1868,11 @@ func (m dashboardModel) renderLocalResultsTabContent() string {
 	}
 	if failed > 0 {
 		b.WriteString(failStyle.Render(fmt.Sprintf("Failed: %d", failed)))
+	}
+	if m.doneStatusFilter != "" {
+		filterStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+		b.WriteString("  ")
+		b.WriteString(filterStyle.Render(fmt.Sprintf("[filter: %s]", m.doneStatusFilter)))
 	}
 	b.WriteString("\n\n")
 
@@ -1370,9 +1976,6 @@ func (m dashboardModel) renderAssessSummaryTabContent() string {
 
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	findingLineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	detailBtnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	detailBtnActiveStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
-	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 
 	if m.assessmentSummary == "" {
 		b.WriteString(dimStyle.Render("  No summary available."))
@@ -1381,18 +1984,6 @@ func (m dashboardModel) renderAssessSummaryTabContent() string {
 	}
 
 	summaryLines := strings.Split(m.assessmentSummary, "\n")
-	canExpand := len(summaryLines) > maxLogLines
-
-	summaryLabel := repoStyle.Render("Summary")
-	expandBtn := ""
-	if canExpand {
-		if m.summaryExpanded {
-			expandBtn = " " + detailBtnActiveStyle.Render("[▼ details]")
-		} else {
-			expandBtn = " " + detailBtnStyle.Render("[▶ details]")
-		}
-	}
-	b.WriteString(fmt.Sprintf("  %s%s\n", summaryLabel, expandBtn))
 
 	summaryBoxWidth := m.termWidth - 10
 	if summaryBoxWidth < 40 {
@@ -1400,64 +1991,39 @@ func (m dashboardModel) renderAssessSummaryTabContent() string {
 	}
 	maxContentWidth := summaryBoxWidth - 4
 
-	if m.summaryExpanded {
-		scrollStart := m.summaryScrollOffset
-		scrollEnd := scrollStart + maxLogLines
-		if scrollEnd > len(summaryLines) {
-			scrollEnd = len(summaryLines)
-		}
+	scrollStart := m.summaryScrollOffset
+	scrollEnd := scrollStart + maxSummaryBoxLines
+	if scrollEnd > len(summaryLines) {
+		scrollEnd = len(summaryLines)
+	}
 
-		var boxContent []string
-		if scrollStart > 0 {
-			boxContent = append(boxContent, dimStyle.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
+	var boxContent []string
+	if scrollStart > 0 {
+		boxContent = append(boxContent, dimStyle.Render(fmt.Sprintf("  ↑ %d more", scrollStart)))
+	}
+	for _, line := range summaryLines[scrollStart:scrollEnd] {
+		if len(line) > maxContentWidth {
+			line = line[:maxContentWidth-3] + "..."
 		}
-		for _, line := range summaryLines[scrollStart:scrollEnd] {
-			if len(line) > maxContentWidth {
-				line = line[:maxContentWidth-3] + "..."
-			}
-			boxContent = append(boxContent, findingLineStyle.Render(line))
-		}
-		if len(summaryLines)-scrollEnd > 0 {
-			boxContent = append(boxContent, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(summaryLines)-scrollEnd)))
-		}
+		boxContent = append(boxContent, findingLineStyle.Render(line))
+	}
+	if len(summaryLines)-scrollEnd > 0 {
+		boxContent = append(boxContent, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(summaryLines)-scrollEnd)))
+	}
 
-		summaryBoxStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("33")).
-			Padding(0, 1).
-			Width(summaryBoxWidth)
+	borderColor := lipgloss.Color("238")
+	if len(summaryLines) > maxSummaryBoxLines {
+		borderColor = lipgloss.Color("33")
+	}
+	summaryBoxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(summaryBoxWidth)
 
-		rendered := summaryBoxStyle.Render(strings.Join(boxContent, "\n"))
-		for _, boxLine := range strings.Split(rendered, "\n") {
-			b.WriteString("    " + boxLine + "\n")
-		}
-	} else {
-		visibleLines := summaryLines
-		if len(visibleLines) > maxLogLines {
-			visibleLines = visibleLines[:maxLogLines]
-		}
-
-		var boxContent []string
-		for _, line := range visibleLines {
-			if len(line) > maxContentWidth {
-				line = line[:maxContentWidth-3] + "..."
-			}
-			boxContent = append(boxContent, findingLineStyle.Render(line))
-		}
-		if canExpand {
-			boxContent = append(boxContent, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(summaryLines)-maxLogLines)))
-		}
-
-		summaryBoxStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("238")).
-			Padding(0, 1).
-			Width(summaryBoxWidth)
-
-		rendered := summaryBoxStyle.Render(strings.Join(boxContent, "\n"))
-		for _, boxLine := range strings.Split(rendered, "\n") {
-			b.WriteString("    " + boxLine + "\n")
-		}
+	rendered := summaryBoxStyle.Render(strings.Join(boxContent, "\n"))
+	for _, boxLine := range strings.Split(rendered, "\n") {
+		b.WriteString("    " + boxLine + "\n")
 	}
 
 	return b.String()
@@ -1470,7 +2036,7 @@ func (m dashboardModel) renderAssessProjectsTabContent() string {
 	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	repoStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	cursorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
 	detailBtnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	detailBtnActiveStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
 	findingLineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
@@ -1519,15 +2085,11 @@ func (m dashboardModel) renderAssessProjectsTabContent() string {
 
 		prefix := "  "
 		if isCursor {
-			prefix = cursorStyle.Render("▸") + " "
+			prefix = cursorStyle.Render(">") + " "
 		}
 
 		if result.Success {
 			finding := m.assessmentFindings[repo]
-			findingPreview := strings.ReplaceAll(finding, "\n", " ")
-			if len(findingPreview) > 120 {
-				findingPreview = findingPreview[:117] + "..."
-			}
 
 			detailsBtn := ""
 			if finding != "" {
@@ -1538,7 +2100,7 @@ func (m dashboardModel) renderAssessProjectsTabContent() string {
 				}
 			}
 
-			b.WriteString(fmt.Sprintf("%s%s %s%s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), findingPreview, detailsBtn))
+			b.WriteString(fmt.Sprintf("%s%s%s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), detailsBtn))
 		} else {
 			b.WriteString(fmt.Sprintf("%s%s Failed ⚠ %s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status))
 		}
@@ -1549,7 +2111,7 @@ func (m dashboardModel) renderAssessProjectsTabContent() string {
 				lines := strings.Split(strings.TrimSpace(finding), "\n")
 				if len(lines) > 0 {
 					findingStart := m.findingScrollOffset
-					findingEnd := findingStart + maxLogLines
+					findingEnd := findingStart + maxFindingBoxLines
 					if findingEnd > len(lines) {
 						findingEnd = len(lines)
 					}
@@ -1632,9 +2194,11 @@ func (m dashboardModel) renderNotifTabContent() string {
 	checkStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("40"))
 	uncheckStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	sendBtnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("206")).Padding(0, 2)
-	sendBtnDimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	sendBtnDimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("240")).Padding(0, 2)
 
-	if len(m.slackRepos) == 0 {
+	hasSummaryOption := m.isAssessmentMode() && m.assessmentSummary != ""
+
+	if len(m.slackRepos) == 0 && !hasSummaryOption {
 		b.WriteString(dimStyle.Render("  No repos with Slack rooms configured."))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("  Set slack_room in your projects config to enable notifications."))
@@ -1654,6 +2218,25 @@ func (m dashboardModel) renderNotifTabContent() string {
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("      %s", m.slackTokenInput.View()))
 		b.WriteString("\n\n")
+
+		// Summary room checkbox (assessment only)
+		if hasSummaryOption {
+			summaryPrefix := "  "
+			if m.notifFocus == notifFocusSummaryRoom {
+				summaryPrefix = cursorStyle.Render("▸") + " "
+			}
+
+			check := uncheckStyle.Render("[ ]")
+			if m.summarySlackEnabled {
+				check = checkStyle.Render("[x]")
+			}
+
+			b.WriteString(fmt.Sprintf("  %s%s %s\n", summaryPrefix, check, labelStyle.Render("Send summary to a channel")))
+			if m.summarySlackEnabled {
+				b.WriteString(fmt.Sprintf("      %s\n", m.summarySlackRoomInput.View()))
+			}
+			b.WriteString("\n")
+		}
 
 		// Repo checkboxes
 		repoChannel := make(map[string]string)
@@ -1712,9 +2295,23 @@ func (m dashboardModel) renderNotifTabContent() string {
 				break
 			}
 		}
+		hasSomethingToSend := hasSelected || m.summarySlackEnabled
 		if m.notifFocus == notifFocusSend {
 			btnPrefix := cursorStyle.Render("▸") + " "
-			if hasSelected {
+			if m.notifConfirming {
+				channelCount := 0
+				for _, sel := range m.slackSelected {
+					if sel {
+						channelCount++
+					}
+				}
+				if m.summarySlackEnabled {
+					channelCount++
+				}
+				confirmStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+				confirmMsg := fmt.Sprintf("Send to %d channel(s)? enter: yes • esc: cancel", channelCount)
+				b.WriteString(fmt.Sprintf("  %s%s\n", btnPrefix, confirmStyle.Render(confirmMsg)))
+			} else if hasSomethingToSend {
 				b.WriteString(fmt.Sprintf("  %s%s\n", btnPrefix, sendBtnStyle.Render("Send")))
 			} else {
 				b.WriteString(fmt.Sprintf("  %s%s\n", btnPrefix, sendBtnDimStyle.Render("Send")))
@@ -1724,9 +2321,26 @@ func (m dashboardModel) renderNotifTabContent() string {
 		}
 
 	case notifPhaseSending:
-		sendingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-		b.WriteString(sendingStyle.Render("  Sending notifications to Slack..."))
-		b.WriteString("\n")
+		frame := spinnerFrames[m.notifTickCount%len(spinnerFrames)]
+		sColor := spinnerColors[m.notifTickCount%len(spinnerColors)]
+		sStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(sColor))
+
+		if len(m.slackStatusLines) > 0 {
+			for i, line := range m.slackStatusLines {
+				isLast := i == len(m.slackStatusLines)-1
+				if isLast && !strings.HasPrefix(line, "✓") && !strings.HasPrefix(line, "⚠") {
+					b.WriteString("  " + sStyle.Render(frame) + " ")
+				} else {
+					b.WriteString("  ")
+				}
+				b.WriteString(dimStyle.Render(line))
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString("  " + sStyle.Render(frame) + " ")
+			b.WriteString(dimStyle.Render("Sending notifications to Slack..."))
+			b.WriteString("\n")
+		}
 
 	case notifPhaseDone:
 		if len(m.slackResults) > 0 {
@@ -1755,7 +2369,7 @@ func (m dashboardModel) renderDoneHelp() string {
 		switch m.notifPhase {
 		case notifPhaseReady:
 			hints = append(hints, helpStyle.Render("↑↓: navigate"))
-			hints = append(hints, helpStyle.Render("space/x: toggle"))
+			hints = append(hints, helpStyle.Render("space: toggle"))
 			hints = append(hints, helpStyle.Render("a: select all"))
 		case notifPhaseSending:
 			hints = append(hints, helpStyle.Render("sending..."))
@@ -1763,17 +2377,14 @@ func (m dashboardModel) renderDoneHelp() string {
 	} else if m.wizardResult != nil && m.wizardResult.Action == "assessment" {
 		if m.activeTab == 0 {
 			// Summary tab
-			if m.summaryExpanded {
-				hints = append(hints, helpStyle.Render("↑↓: scroll"))
-				hints = append(hints, helpStyle.Render("enter/esc: close"))
-			} else {
-				hints = append(hints, helpStyle.Render("enter/l: expand"))
-			}
+			hints = append(hints, helpStyle.Render("↑↓: scroll"))
+			hints = append(hints, helpStyle.Render("pgup/pgdn: page"))
 		} else {
 			// Projects tab
 			if m.expandedFindingRepo != "" {
 				hints = append(hints, helpStyle.Render("↑↓: scroll"))
-				hints = append(hints, helpStyle.Render("enter/esc: close"))
+				hints = append(hints, helpStyle.Render("pgup/pgdn: page"))
+				hints = append(hints, helpStyle.Render("h/esc: close"))
 			} else {
 				results := m.doneResults()
 				failed := 0
@@ -1806,11 +2417,14 @@ func (m dashboardModel) renderDoneHelp() string {
 		}
 
 		if m.expandedLogRepo != "" {
-			hints = append(hints, helpStyle.Render("↑↓: scroll logs"))
-			hints = append(hints, helpStyle.Render("enter/esc: close"))
+			hints = append(hints, helpStyle.Render("↑↓: scroll"))
+			hints = append(hints, helpStyle.Render("pgup/pgdn: page"))
+			hints = append(hints, helpStyle.Render("h/esc: close"))
 		} else {
 			hints = append(hints, helpStyle.Render("↑↓: navigate"))
 			hints = append(hints, helpStyle.Render("enter/l: view logs"))
+			hints = append(hints, helpStyle.Render("s: filter status"))
+			hints = append(hints, helpStyle.Render("c: copy report"))
 			if failed > 0 {
 				hints = append(hints, retryStyle.Render(fmt.Sprintf("r: retry %d failed", failed)))
 			}
@@ -1848,6 +2462,32 @@ func (m dashboardModel) buildAssessmentReport() string {
 			b.WriteString(finding)
 			b.WriteString("\n\n")
 		}
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// buildLocalReport builds a plain-text report of local results for clipboard.
+func (m dashboardModel) buildLocalReport() string {
+	var b strings.Builder
+
+	b.WriteString("# Results Report\n\n")
+
+	results := m.doneResults()
+	for _, repo := range m.progress.repos {
+		result, ok := results[repo]
+		if !ok {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("## %s\n", repo))
+		b.WriteString(fmt.Sprintf("Status: %s\n", result.Status))
+		if result.PRURL != "" {
+			b.WriteString(fmt.Sprintf("PR: %s\n", result.PRURL))
+		}
+		if result.AIOutput != "" {
+			b.WriteString(fmt.Sprintf("\n%s\n", strings.TrimSpace(result.AIOutput)))
+		}
+		b.WriteString("\n")
 	}
 
 	return strings.TrimSpace(b.String())
