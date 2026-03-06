@@ -461,10 +461,7 @@ func processProject(job ProcessJob) ProcessResult {
 func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
 	filesystem.CreateWorkspace()
 
-	checkpoint := parallelism
-	if checkpoint < 5 {
-		checkpoint = 5
-	}
+	checkpoint := appCfg.CheckpointInterval()
 
 	var jobs []ProcessJob
 	for _, project := range selectedProjects {
@@ -665,10 +662,7 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 		sender.UpdatePrompt(rewrittenPrompt)
 	}
 
-	checkpoint := parallelism
-	if checkpoint < 5 {
-		checkpoint = 5
-	}
+	checkpoint := appCfg.CheckpointInterval()
 
 	var jobs []AssessJob
 	for _, project := range selectedProjects {

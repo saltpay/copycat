@@ -614,11 +614,7 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 
 	checkpointInterval := 0
 	if m.cfg.Parallelism > 0 && len(repos) > 0 {
-		// Only checkpoint for non-issues workflows (checked below)
-		checkpointInterval = m.cfg.Parallelism
-		if checkpointInterval < 5 {
-			checkpointInterval = 5
-		}
+		checkpointInterval = m.cfg.AppConfig.CheckpointInterval()
 	}
 
 	if checkpointInterval > 0 {

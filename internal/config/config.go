@@ -20,11 +20,50 @@ type GitHubConfig struct {
 	AutoDiscoveryTopic string `yaml:"auto_discovery_topic"`
 }
 
+// BatchConfirm controls when to pause for user confirmation between batches.
+// Valid values in YAML: "automatic" (never pause) or a positive integer (pause every N repos).
+type BatchConfirm struct {
+	Value int  // 0 means automatic (no pauses), >0 means pause every N repos
+	IsSet bool // whether the field was explicitly set in config
+}
+
+func (b *BatchConfirm) UnmarshalYAML(value *yaml.Node) error {
+	if value.Tag == "!!str" {
+		if value.Value == "automatic" {
+			b.Value = 0
+			b.IsSet = true
+			return nil
+		}
+		return fmt.Errorf("invalid confirm_move_to_next_batch value: %q (must be \"automatic\" or a positive number)", value.Value)
+	}
+	var n int
+	if err := value.Decode(&n); err != nil {
+		return fmt.Errorf("invalid confirm_move_to_next_batch: must be \"automatic\" or a positive number")
+	}
+	if n <= 0 {
+		return fmt.Errorf("confirm_move_to_next_batch must be a positive number or \"automatic\"")
+	}
+	b.Value = n
+	b.IsSet = true
+	return nil
+}
+
 type Config struct {
-	GitHub            GitHubConfig `yaml:"github"`
-	Parallelism       int          `yaml:"parallelism,omitempty"`
-	AgentInstructions []string     `yaml:"agent_instructions,omitempty"`
+	GitHub            GitHubConfig  `yaml:"github"`
+	Parallelism       int           `yaml:"parallelism,omitempty"`
+	ConfirmBatch      *BatchConfirm `yaml:"confirm_move_to_next_batch,omitempty"`
+	AgentInstructions []string      `yaml:"agent_instructions,omitempty"`
 	AIToolsConfig     `yaml:",inline"`
+}
+
+// CheckpointInterval returns the number of repos to process before pausing.
+// Returns 0 for automatic (no pauses), or N for pausing every N repos.
+// Defaults to 10 when not configured.
+func (c *Config) CheckpointInterval() int {
+	if c.ConfirmBatch != nil && c.ConfirmBatch.IsSet {
+		return c.ConfirmBatch.Value
+	}
+	return 10
 }
 
 type AITool struct {
