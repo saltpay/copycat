@@ -562,7 +562,7 @@ func (m projectSelectorModel) View() string {
 	} else {
 		b.WriteString(titleStyle.Render("Select Projects"))
 		if len(m.appliedTerms) > 0 {
-			b.WriteString("\n")
+			b.WriteString("  ")
 			chipStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("255")).
 				Background(lipgloss.Color("205")).

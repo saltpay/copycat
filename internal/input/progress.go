@@ -766,7 +766,6 @@ func (m progressModel) View() string {
 		pauseStyle := lipgloss.NewStyle().Bold(true).Foreground(colorCancelled)
 		b.WriteString(pauseStyle.Render(fmt.Sprintf(
 			"⏸  Batch complete — %d of %d repos processed.", m.completed, m.total)))
-		b.WriteString("\n")
 		b.WriteString(stDim.Render("  Please verify you have sufficient AI credits before continuing with the next batch."))
 		b.WriteString("\n")
 		if m.pauseEditing {
@@ -778,10 +777,6 @@ func (m progressModel) View() string {
 			b.WriteString(stDim.Render("  enter: apply • esc: cancel"))
 			b.WriteString("\n")
 		} else {
-			if m.prompt != m.originalPrompt {
-				b.WriteString(stDone.Bold(true).Render("  ✓ Prompt updated for next batch"))
-				b.WriteString("\n")
-			}
 			b.WriteString(stDim.Render("  Press Enter to continue • e: edit prompt • Ctrl+C to stop."))
 			b.WriteString("\n")
 		}

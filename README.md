@@ -107,11 +107,15 @@ github:
   organization: my-org
   auto_discovery_topic: copycat
 
+parallelism: 3
+
 agent_instructions:
   - CLAUDE.md
   - .claude
   - .cursorrules
   - .github/copilot-instructions.md
+
+default: claude
 
 tools:
   - name: claude
@@ -144,8 +148,10 @@ tools:
 projects:
   - repo: service-a
     slack_room: "#team-a"
+    topics: [go, backend]
   - repo: service-b
     slack_room: "#team-b"
+    topics: [java, backend]
 ```
 
 ### Configuration Fields
@@ -154,7 +160,9 @@ projects:
 
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
+- `parallelism` (optional): Number of repositories to process concurrently. Defaults to `3`, maximum `10`.
 - `agent_instructions` (optional): List of files/directories to remove from cloned repos when "Ignore Agent Instructions" is enabled. Defaults to `CLAUDE.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`. Files are deleted before the AI tool runs and restored via `git checkout` before committing, so they never appear in the PR.
+- `default` (optional): Name of the default AI tool to pre-select. Defaults to the first tool in the list.
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
@@ -169,6 +177,7 @@ projects:
 - `projects`: List of repositories (synced from GitHub or added manually)
   - `repo`: Repository name
   - `slack_room`: Slack channel for notifications (optional)
+  - `topics`: GitHub topics associated with the repository (optional, synced from GitHub via `r` in the project selector)
 
 When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub.
 
