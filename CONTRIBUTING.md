@@ -14,27 +14,43 @@ go test ./...
 Copycat is a Go CLI that uses [Bubble Tea](https://github.com/charmbracelet/bubbletea) for its TUI. The main entry point is `main.go`, which coordinates:
 
 1. **Project selection** — interactive multi-select of GitHub repos
-2. **Wizard** — collects PR title, AI prompt, branch strategy, Slack settings
-3. **Processing** — clones repos, runs AI tool, creates PRs in parallel
+2. **Wizard** — collects action type, PR title/question, AI prompt, branch strategy, notification settings
+3. **Processing** — clones repos, runs AI tool, creates PRs (or collects findings) in parallel batches
 4. **Done** — summary of results
+
+### Two Workflows
+
+- **Perform Changes** (`action = "local"`) — clones repos, runs AI tool with a prompt, commits changes, creates PRs
+- **Run Assessment** (`action = "assessment"`) — clones repos, runs AI tool with a question, collects per-repo findings, generates a cross-repo summary (no branches/commits/PRs)
 
 ### Package Layout
 
 | Package | Purpose |
 |---|---|
 | `main.go` | Entry point, subcommand routing, repo processing orchestration |
-| `internal/config/` | YAML config loading/saving, AI tool definitions, defaults |
+| `internal/config/` | YAML config loading/saving, AI tool definitions, XDG path resolution, defaults |
 | `internal/input/` | Bubble Tea models: dashboard, project selector, wizard, progress |
-| `internal/ai/` | AI tool invocation (`VibeCode`, `GeneratePRDescription`) |
-| `internal/git/` | Git/GitHub CLI operations (clone, branch, push, PR creation) |
-| `internal/permission/` | Security hardening: repo sanitization, permission prompting |
+| `internal/ai/` | AI tool invocation (`VibeCode`, `Assess`, `GeneratePRDescription`, `SummarizeFindings`) |
+| `internal/git/` | Git/GitHub CLI operations (clone, branch, push, PR creation, topic sync) |
+| `internal/permission/` | MCP permission handler, HTTP permission server, repo sanitization |
 | `internal/cmd/` | Subcommands (`edit`, `migrate`, `reset`) |
 | `internal/filesystem/` | Workspace directory management |
-| `internal/slack/` | Slack notification delivery |
+| `internal/slack/` | Slack notification delivery (PR links, assessment findings, summaries) |
+
+### Subcommands
+
+| Command | Description |
+|---|---|
+| `copycat` | Main TUI (default) |
+| `copycat edit config` | Opens config file in `$EDITOR` |
+| `copycat edit projects` | Opens projects file in `$EDITOR` |
+| `copycat migrate` | Migrates old config/projects to XDG paths |
+| `copycat reset` | Deletes config and projects files (with confirmation) |
+| `copycat permission-handler` | MCP server subprocess (internal, not for direct use) |
 
 ### Bubble Tea Message Flow
 
-The `dashboardModel` manages four phases. Sub-models communicate via custom messages:
+The `dashboardModel` manages phases. Sub-models communicate via custom messages:
 
 ```
 projectSelectorModel  →  projectsConfirmedMsg  →  wizardModel
@@ -43,6 +59,63 @@ progressModel         →  processingDoneMsg      →  phaseDone
 ```
 
 Background processing uses a channel-based approach: goroutines send `ProjectStatusMsg` / `ProjectDoneMsg` into `statusCh`, and `listenForStatus()` pumps them into the Bubble Tea event loop.
+
+### Config Paths (XDG-compliant)
+
+| OS | Config directory |
+|---|---|
+| macOS | `~/Library/Application Support/copycat/` |
+| Linux | `~/.config/copycat/` |
+| Windows | `%AppData%/copycat/` |
+
+Config and projects are stored in **separate files**: `config.yaml` and `projects.yaml`.
+
+## Architectural Decisions
+
+### Why the MCP handler is a separate subprocess
+
+Claude Code's `--permission-prompt-tool` requires an MCP server. MCP servers are separate processes that communicate over stdin/stdout (JSON-RPC 2.0). The `copycat permission-handler` subcommand is that process — Claude spawns it automatically via the temp MCP config file.
+
+Because it's a separate process, it can't share memory with the main Copycat process. This drives two design decisions:
+
+- **`COPYCAT_PERMISSION_PORT`**: The handler needs to reach the main process's HTTP permission server. The port is passed via env var in the MCP config.
+- **`COPYCAT_PREAPPROVED_TOOLS`**: The handler auto-approves Bash commands matching allowed prefixes (e.g., `tree`, `cat`) without a round-trip to the TUI. These prefixes are parsed from the config's `allowed_tools` by `ParseBashPrefixes()` (converting `"Bash(tree:*)"` to `"tree"`) and passed via env var since the subprocess can't read the parent's config.
+- **`COPYCAT_REPO_NAME`**: Set per-repo on the AI subprocess so the handler can include the repo name in TUI permission prompts.
+
+Everything that isn't pre-approved goes through the HTTP permission server → Bubble Tea status channel → TUI prompt → user approval.
+
+### Why gh CLI calls are serialized
+
+All `gh` CLI invocations go through `runGhContext()` which holds a global `sync.Mutex` (`ghMu`). Even though repos are processed in parallel, GitHub API calls are serialized to avoid rate limiting. This is intentional — parallelism gains come from AI processing time, not GitHub API calls.
+
+### Why user MCP servers are not duplicated in the temp config
+
+The generated MCP config file only contains the `copycat-auth` server. User MCP servers are loaded via `--setting-sources user` instead. This avoids duplicating remote/SSE servers that may be unreachable, which would block Claude startup.
+
+### Why AskUserQuestion is handled as a deny
+
+When Claude uses the `AskUserQuestion` tool, the MCP handler routes it to the TUI for user input. The answer is returned as a **deny** response with `"User answered: <label>"`. This is because the MCP permission protocol only has allow/deny — deny with a message is the only way to pass information back to Claude without executing the original tool.
+
+### Permission timeout
+
+Unanswered permission prompts auto-deny after **5 minutes** (`permissionTimeout` in `server.go`).
+
+### Batch processing and checkpoints
+
+Both workflows (changes and assessments) process repos in batches. After each batch:
+- The TUI pauses, asking the user to verify AI credits before continuing
+- The user can press `e` to edit the prompt for remaining repos
+- Resume is channel-based (`sender.ResumeCh` carries the possibly-updated prompt)
+
+Batch size is controlled by `confirm_move_to_next_batch` in config (default: pause every 10 repos, or `"automatic"` to skip pauses).
+
+### Agent instruction file handling
+
+Files listed in `agent_instructions` config (defaults: `CLAUDE.md`, `AGENTS.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`) can be stripped from target repos before the AI runs (opt-in during wizard). Git-tracked files are restored via `git checkout --`; untracked files are backed up to a temp directory and restored by rename.
+
+### Topic sync
+
+`SyncTopicsWithCache` in `git/topics.go` provides bidirectional sync between the local `projects.yaml` cache and GitHub repo topics (used for project metadata like Slack channels).
 
 ## Security Hardening
 
@@ -122,9 +195,22 @@ Edit your `config.yaml` (`copycat edit config`) to adjust `allowed_tools` and `d
 - `WebFetch` — fetch URLs (blocked by default)
 - `Task` — spawn sub-agents (blocked by default)
 
-The `supports_permission_prompt: true` flag enables the interactive permission prompting. Set it to `false` to disable prompting (non-whitelisted commands will be silently denied by Claude).
+Interactive permission prompting is always enabled for Claude. Non-allowlisted Bash commands and MCP tools will trigger a TUI prompt for user approval.
 
 ## AI Tool Configuration
+
+### Supported AI Tools
+
+Four tools are configured by default:
+
+| Name | Binary | Notes |
+|---|---|---|
+| `claude` | `claude` | Full support: allowed/disallowed tools, MCP permission prompting, PR description generation |
+| `codex` | `codex` | `--full-auto` mode |
+| `qwen` | `qwen` | `--approval-mode auto-edit` |
+| `gemini` | `gemini` | `--approval-mode auto_edit` |
+
+The config is tool-agnostic — any CLI tool can be added. `allowed_tools` and `disallowed_tools` are Claude-specific fields; other tools ignore them. When `summary_args` is empty, `code_args` are used as fallback for PR descriptions and assessment summaries.
 
 ### Config Fields
 
@@ -136,10 +222,7 @@ tools:
     summary_args: [...]                     # Args for PR description generation
     allowed_tools: [...]                    # Whitelisted Claude tools
     disallowed_tools: [...]                 # Blocked Claude tools
-    supports_permission_prompt: true        # Enable interactive permission TUI
 ```
-
-`allowed_tools`, `disallowed_tools`, and `supports_permission_prompt` are Claude-specific. Other AI tools (codex, qwen, gemini) don't use these fields.
 
 ## Code Style
 

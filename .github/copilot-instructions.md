@@ -27,27 +27,28 @@ The primary goal of Copycat is to:
 
 ### Core Components
 
-1. **GitHub Repository Topics**
-   - Supports metadata: Slack channels
+1. **TUI (`internal/input/`)**
+   - Interactive CLI using [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+   - Dashboard manages phases: Projects → Wizard → Processing → Done
+   - Sub-models communicate via custom messages (not `tea.Quit`)
 
-2. **Main Application (`main.go`)**
-   - Interactive CLI using `promptui`
-   - Two primary workflows: GitHub Issues and Local Changes
-   - Stateless execution model
-   - Auto-cleanup of temporary resources
+2. **Two Workflows**
+   - **Perform Changes**: clones repos, runs AI, commits, creates PRs
+   - **Run Assessment**: clones repos, runs AI with a question, collects findings, generates cross-repo summary (no PRs)
 
 3. **Integration Points**
-   - **GitHub CLI (`gh`)**: Issue/PR management
-   - **Claude CLI (`claude`)**: AI-powered code changes
+   - **GitHub CLI (`gh`)**: PR management, topic sync (calls serialized via mutex)
+   - **AI CLIs**: Claude, Codex, Qwen, Gemini (tool-agnostic config)
    - **Git**: Repository operations
+   - **Slack**: PR notifications, assessment findings/summaries
 
 ### Key Design Patterns
 
 - **Input Collection Phase**: All user inputs gathered upfront before any operations
-- **Batch Processing**: Iterates through selected repositories sequentially
+- **Batch Processing**: Parallel processing with configurable checkpoint pauses between batches
 - **Auto-cleanup**: Temporary `repos/` directory removed after processing
 - **Error Tolerance**: Continues processing remaining repos if one fails
-- **Non-interactive Mode**: Claude runs with `--permission-mode acceptEdits`
+- **MCP Permission Prompting**: Non-allowlisted tool calls routed to TUI for user approval
 
 ## Code Style & Conventions
 
@@ -63,11 +64,12 @@ The primary goal of Copycat is to:
 
 ### Project-Specific Conventions
 
-1. **Branch Naming**: `copycat-YYYYMMDD-HHMMSS` (timestamp-based)
+1. **Branch Naming**: User-specified; strategies are "reuse if exists" or "skip if exists"
 2. **Commit Messages**: Use PR title as commit message
 3. **PR Titles**: `Description` (users are reminded they may include a ticket reference)
 4. **Repository Cloning**: Always use SSH URLs
 5. **Directory Structure**: Temporary clones in `repos/` subdirectory
+6. **Config Paths**: XDG-compliant (`~/Library/Application Support/copycat/` on macOS, `~/.config/copycat/` on Linux)
 
 ### Error Handling Philosophy
 
@@ -97,7 +99,11 @@ The primary goal of Copycat is to:
 ### Dependencies
 
 Current dependencies (from `go.mod`):
-- `github.com/manifoldco/promptui`: Interactive CLI prompts
+- `github.com/charmbracelet/bubbletea`: TUI framework
+- `github.com/charmbracelet/bubbles`: TUI components (text input, viewport, etc.)
+- `github.com/charmbracelet/lipgloss`: TUI styling
+- `github.com/atotto/clipboard`: Clipboard access
+- `github.com/google/uuid`: UUID generation
 - `gopkg.in/yaml.v3`: YAML configuration parsing
 
 Keep dependencies minimal. Prefer standard library when possible.
@@ -106,25 +112,22 @@ Keep dependencies minimal. Prefer standard library when possible.
 
 ### Pull Request Creation
 
-- **Auto-generated descriptions**: Claude generates PR body from changes
+- **Auto-generated descriptions**: AI tool generates PR body from changes
 - **Length limit**: PR descriptions truncated at 2000 characters
-- **Base branch**: Dynamically detected (usually `main` or `master`)
-
-### GitHub Issues Workflow
-
-- **Auto-assignment**: Issues assigned to `@copilot`
-- **Bulk creation**: Creates issues across all selected repos
-- **Warning**: Copilot doesn't sign commits (displayed to user)
+- **Base branch**: Dynamically detected via `git symbolic-ref refs/remotes/origin/HEAD`
+- **Labels**: PRs are labeled with `copycat` (purple label, auto-created if missing)
 
 ## AI Assistant Guidelines
 
 When working on this codebase:
 
-1. **Preserve the core workflow**: Input collection → Processing → Cleanup
-2. **Maintain error tolerance**: Individual failures shouldn't block batch operations
-3. **Keep it simple**: Avoid over-engineering for edge cases
-4. **User experience matters**: Clear prompts and progress indicators
-5. **Test thoroughly**: Especially git operations and cleanup
-6. **Document business rules**: Clearly
-7. **Consider scale**: Changes should work for 1 repo or 100 repos
-8. **Security first**: Never compromise authentication or credentials
+1. **Read `CONTRIBUTING.md` first**: Before making changes, read it to understand the architecture, design decisions, and conventions
+2. **Update `CONTRIBUTING.md`**: When making architectural changes, adding new patterns, or changing significant behavior, update CONTRIBUTING.md to reflect those changes
+3. **Preserve the core workflow**: Input collection → Processing → Cleanup
+4. **Maintain error tolerance**: Individual failures shouldn't block batch operations
+5. **Keep it simple**: Avoid over-engineering for edge cases
+6. **User experience matters**: Clear prompts and progress indicators
+7. **Test thoroughly**: Especially git operations and cleanup
+8. **Document business rules**: Clearly
+9. **Consider scale**: Changes should work for 1 repo or 100 repos
+10. **Security first**: Never compromise authentication or credentials

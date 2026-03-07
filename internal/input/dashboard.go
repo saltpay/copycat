@@ -636,14 +636,14 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		CancelRegistry: m.cancelRegistry,
 	}
 
-	// Set up permission server if the AI tool supports it
-	if m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
+	// Set up permission server for interactive tool approval
+	if m.wizardResult.AITool != nil {
 		permServer, err := permission.NewPermissionServer(m.statusCh)
 		if err != nil {
 			log.Printf("⚠ Failed to start permission server: %v", err)
 		} else {
 			m.permServer = permServer
-			mcpPath, cleanup, err := permission.GenerateMCPConfig(permServer.Port())
+			mcpPath, cleanup, err := permission.GenerateMCPConfig(permServer.Port(), m.wizardResult.AITool.AllowedTools)
 			if err != nil {
 				log.Printf("⚠ Failed to generate MCP config: %v", err)
 				permServer.Shutdown(context.Background())
@@ -1909,7 +1909,15 @@ func (m dashboardModel) renderLocalResultsTabContent() string {
 			}
 		}
 
-		b.WriteString(fmt.Sprintf("%s%s %s%s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), result.Status, logsBtn))
+		displayStatus := result.Status
+		if lines := strings.SplitN(displayStatus, "\n", 2); len(lines) > 1 {
+			displayStatus = lines[0]
+		}
+		detailHint := ""
+		if result.AIOutput != "" && !isExpanded {
+			detailHint = " " + dimStyle.Render("Press enter for details")
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s%s%s\n", prefix, repoStyle.Render(fmt.Sprintf("[%s]", repo)), displayStatus, logsBtn, detailHint))
 
 		if isExpanded {
 			lines := aiOutputLines(result.AIOutput)

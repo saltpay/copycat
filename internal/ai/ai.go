@@ -71,7 +71,7 @@ func SummarizeFindings(ctx context.Context, aiTool *config.AITool, findings map[
 		input = input[:50000] + "\n...(truncated)"
 	}
 
-	summaryPrompt := fmt.Sprintf("You are summarizing the results of an assessment across multiple repositories. Provide an executive summary of the findings, highlighting common patterns, outliers, and actionable insights. Output ONLY the summary.\n\n%s", input)
+	summaryPrompt := fmt.Sprintf("You are summarizing the results of an assessment across multiple repositories. Provide an executive summary of the findings, highlighting common patterns, outliers, and actionable insights. If you include a table, do NOT use emojis in table cells — use plain ASCII text like Y, N, !, or - instead, and pad columns to equal width so the table aligns in monospace. Output ONLY the summary.\n\n%s", input)
 
 	cmd := aiTool.BuildCommandContext(ctx, summaryPrompt, pickArgs(aiTool))
 	output, err := cmd.Output()
@@ -95,7 +95,19 @@ Formatting rules:
 - Format code blocks with triple backticks
 - Convert markdown links [label](url) to Slack format <url|label>
 - Use • for bulleted lists, numbers for ordered lists
-- Wrap markdown tables (pipe-delimited rows) in triple backticks so they render as monospace in Slack
+
+Table formatting (CRITICAL — tables must render correctly in Slack monospace):
+- Wrap pipe-delimited tables in triple backticks so they render as monospace in Slack
+- Replace ALL emojis inside tables with fixed-width ASCII text: use "Y" for pass/yes/check emojis, "N" for fail/no/cross emojis, "!" for warning emojis, "-" for N/A
+- Pad every cell so all columns have consistent width — each column must be the same width in every row including the header and separator
+- The separator row MUST have exactly the same number of columns as the header row
+- Example of a well-formatted table:
+`+"`"+``+"`"+``+"`"+`
+| Item       | repo-a | repo-b | Pass Rate  |
+|------------|--------|--------|------------|
+| IT Tests   | Y      | N      | 1/2 (50%%)  |
+| Canary     | Y      | -      | 1/1 (100%%) |
+`+"`"+``+"`"+``+"`"+`
 
 Strict rules:
 - Output ONLY the reformatted text. No preamble, no commentary, no sign-off.

@@ -112,6 +112,7 @@ confirm_move_to_next_batch: 10  # or "automatic" to never pause
 
 agent_instructions:
   - CLAUDE.md
+  - AGENTS.md
   - .claude
   - .cursorrules
   - .github/copilot-instructions.md
@@ -132,7 +133,6 @@ tools:
     disallowed_tools:
       - WebFetch
       - Task
-    supports_permission_prompt: true
   - name: codex
     command: codex
     code_args: [exec, --full-auto]
@@ -163,7 +163,7 @@ projects:
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
 - `parallelism` (optional): Number of repositories to process concurrently. Defaults to `3`, maximum `10`.
 - `confirm_move_to_next_batch` (optional): Controls when Copycat pauses between batches for confirmation. Set to a number to pause every N repos, or `automatic` to never pause. Defaults to `10`.
-- `agent_instructions` (optional): List of files/directories to remove from cloned repos when "Ignore Agent Instructions" is enabled. Defaults to `CLAUDE.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`. Files are deleted before the AI tool runs and restored via `git checkout` before committing, so they never appear in the PR.
+- `agent_instructions` (optional): List of files/directories to remove from cloned repos when "Ignore Agent Instructions" is enabled. Defaults to `CLAUDE.md`, `AGENTS.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`. Files are deleted before the AI tool runs and restored via `git checkout` before committing, so they never appear in the PR.
 - `default` (optional): Name of the default AI tool to pre-select. Defaults to the first tool in the list.
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
@@ -172,7 +172,7 @@ projects:
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
   - `allowed_tools` (optional, Claude-specific): Allowlist of tools the AI can use
   - `disallowed_tools` (optional, Claude-specific): Blocklist of tools
-  - `supports_permission_prompt` (optional, Claude-specific): Enable interactive permission prompting for non-allowlisted commands
+
 
 **`projects.yaml`:**
 

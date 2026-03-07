@@ -10,6 +10,7 @@ const ConfigTemplate = `github:
 
 agent_instructions:
   - CLAUDE.md
+  - AGENTS.md
   - .claude
   - .cursorrules
   - .github/copilot-instructions.md
@@ -44,7 +45,6 @@ tools:
     disallowed_tools:
       - WebFetch
       - Task
-    supports_permission_prompt: true
   - name: codex
     command: codex
     code_args:
@@ -80,6 +80,7 @@ func DefaultConfig(org string) *Config {
 		},
 		AgentInstructions: []string{
 			"CLAUDE.md",
+			"AGENTS.md",
 			".claude",
 			".cursorrules",
 			".github/copilot-instructions.md",
@@ -104,8 +105,7 @@ func DefaultConfig(org string) *Config {
 						"Bash(wc:*)",
 						"Bash(grep:*)",
 					},
-					DisallowedTools:          []string{"WebFetch", "Task"},
-					SupportsPermissionPrompt: true,
+					DisallowedTools: []string{"WebFetch", "Task"},
 				},
 				{
 					Name:        "codex",

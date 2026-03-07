@@ -67,13 +67,12 @@ func (c *Config) CheckpointInterval() int {
 }
 
 type AITool struct {
-	Name                     string   `yaml:"name"`
-	Command                  string   `yaml:"command"`
-	CodeArgs                 []string `yaml:"code_args"`
-	SummaryArgs              []string `yaml:"summary_args"`
-	AllowedTools             []string `yaml:"allowed_tools,omitempty"`
-	DisallowedTools          []string `yaml:"disallowed_tools,omitempty"`
-	SupportsPermissionPrompt bool     `yaml:"supports_permission_prompt,omitempty"`
+	Name            string   `yaml:"name"`
+	Command         string   `yaml:"command"`
+	CodeArgs        []string `yaml:"code_args"`
+	SummaryArgs     []string `yaml:"summary_args"`
+	AllowedTools    []string `yaml:"allowed_tools,omitempty"`
+	DisallowedTools []string `yaml:"disallowed_tools,omitempty"`
 }
 
 // CommandOptions holds optional flags for BuildCommand.
@@ -92,7 +91,7 @@ func (t *AITool) BuildCommand(prompt string, baseArgs []string, opts ...CommandO
 		args = append(args, "--disallowedTools")
 		args = append(args, t.DisallowedTools...)
 	}
-	if t.SupportsPermissionPrompt && len(opts) > 0 && opts[0].MCPConfigPath != "" {
+	if len(opts) > 0 && opts[0].MCPConfigPath != "" {
 		args = append(args, "--mcp-config", opts[0].MCPConfigPath)
 		args = append(args, "--permission-prompt-tool", "mcp__copycat-auth__handle_permission")
 	}
@@ -110,7 +109,7 @@ func (t *AITool) BuildCommandContext(ctx context.Context, prompt string, baseArg
 		args = append(args, "--disallowedTools")
 		args = append(args, t.DisallowedTools...)
 	}
-	if t.SupportsPermissionPrompt && len(opts) > 0 && opts[0].MCPConfigPath != "" {
+	if len(opts) > 0 && opts[0].MCPConfigPath != "" {
 		args = append(args, "--mcp-config", opts[0].MCPConfigPath)
 		args = append(args, "--permission-prompt-tool", "mcp__copycat-auth__handle_permission")
 	}
