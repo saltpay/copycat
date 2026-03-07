@@ -310,7 +310,8 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
-		barWidth := m.termWidth - 40
+		// Account for dashboard border (2) + padding (2) + labels/spacing on the progress line
+		barWidth := m.termWidth - 50
 		if barWidth < 10 {
 			barWidth = 10
 		}
