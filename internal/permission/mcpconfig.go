@@ -61,12 +61,12 @@ func GenerateMCPConfig(port int) (string, func(), error) {
 		return "", nil, fmt.Errorf("failed to marshal copycat-auth config: %w", err)
 	}
 
-	// Start with the user's MCP servers, then add copycat-auth (takes precedence).
-	servers := readUserMCPServers()
-	if servers == nil {
-		servers = make(map[string]json.RawMessage)
+	// Only include copycat-auth — user MCP servers are loaded via --setting-sources
+	// and must not be duplicated here (remote/SSE servers can block Claude startup
+	// if they are unreachable).
+	servers := map[string]json.RawMessage{
+		"copycat-auth": json.RawMessage(copycatAuthRaw),
 	}
-	servers["copycat-auth"] = json.RawMessage(copycatAuthRaw)
 
 	cfg := mcpConfig{MCPServers: servers}
 
