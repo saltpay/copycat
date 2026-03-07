@@ -566,13 +566,14 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 
 // AssessJob represents a single project assessment job.
 type AssessJob struct {
-	Ctx          context.Context
-	Project      config.Project
-	AITool       *config.AITool
-	AppConfig    config.Config
-	Prompt       string
-	IgnoreFiles  []string
-	UpdateStatus func(status string)
+	Ctx           context.Context
+	Project       config.Project
+	AITool        *config.AITool
+	AppConfig     config.Config
+	Prompt        string
+	IgnoreFiles   []string
+	MCPConfigPath string
+	UpdateStatus  func(status string)
 }
 
 // AssessResult represents the result of assessing a single project.
@@ -623,7 +624,7 @@ func assessProject(job AssessJob) AssessResult {
 
 	// Assess
 	job.UpdateStatus("Running assessment...")
-	finding, err := ai.Assess(ctx, job.AITool, job.Prompt, targetPath, project.Repo)
+	finding, err := ai.Assess(ctx, job.AITool, job.Prompt, targetPath, job.MCPConfigPath, project.Repo)
 	if err != nil {
 		cleanup()
 		if ctx.Err() != nil {
@@ -678,12 +679,13 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 			ignoreFiles = appCfg.AgentInstructions
 		}
 		jobs = append(jobs, AssessJob{
-			Ctx:         ctx,
-			Project:     project,
-			AITool:      setup.AITool,
-			AppConfig:   appCfg,
-			Prompt:      rewrittenPrompt,
-			IgnoreFiles: ignoreFiles,
+			Ctx:           ctx,
+			Project:       project,
+			AITool:        setup.AITool,
+			AppConfig:     appCfg,
+			Prompt:        rewrittenPrompt,
+			IgnoreFiles:   ignoreFiles,
+			MCPConfigPath: sender.MCPConfigPath,
 		})
 	}
 
