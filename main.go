@@ -498,6 +498,14 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 	var mu sync.Mutex
 	resultMap := make(map[string]ProcessResult)
 
+	// checkpoint=0 means "automatic" (no pauses) — process all jobs in one batch.
+	if checkpoint <= 0 {
+		checkpoint = len(jobs)
+		if checkpoint == 0 {
+			checkpoint = 1
+		}
+	}
+
 	// Process in batches, pausing between them for user confirmation
 	for batchStart := 0; batchStart < len(jobs); batchStart += checkpoint {
 		batchEnd := batchStart + checkpoint
@@ -696,6 +704,14 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 
 	var mu sync.Mutex
 	findings := make(map[string]string)
+
+	// checkpoint=0 means "automatic" (no pauses) — process all jobs in one batch.
+	if checkpoint <= 0 {
+		checkpoint = len(jobs)
+		if checkpoint == 0 {
+			checkpoint = 1
+		}
+	}
 
 	for batchStart := 0; batchStart < len(jobs); batchStart += checkpoint {
 		batchEnd := batchStart + checkpoint
