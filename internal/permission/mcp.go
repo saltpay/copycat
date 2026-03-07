@@ -40,7 +40,6 @@ func RunMCPHandler() error {
 	}
 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%s", port)
-
 	scanner := bufio.NewScanner(os.Stdin)
 	// Increase buffer for large messages
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
@@ -120,6 +119,21 @@ func handleMCPRequest(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 	}
 }
 
+// isPreapprovedBash checks if a Bash command matches any preapproved prefix
+// from the COPYCAT_PREAPPROVED_TOOLS environment variable.
+func isPreapprovedBash(command string) bool {
+	raw := os.Getenv("COPYCAT_PREAPPROVED_TOOLS")
+	if raw == "" {
+		return false
+	}
+	for _, prefix := range strings.Split(raw, ",") {
+		if prefix != "" && strings.HasPrefix(command, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func handleToolCall(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 	var params struct {
 		Name      string          `json:"name"`
@@ -135,6 +149,16 @@ func handleToolCall(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 	}
 	if err := json.Unmarshal(params.Arguments, &args); err != nil {
 		return respondError(req.ID, -32602, "invalid arguments")
+	}
+
+	// Auto-approve Bash commands that match preapproved prefixes.
+	// All other tools (MCP tools, non-matching Bash, AskUserQuestion) go
+	// through the HTTP permission server for user prompting in the TUI.
+	if args.ToolName == "Bash" {
+		cmd := extractCommand(args.Input)
+		if isPreapprovedBash(cmd) {
+			return respondAllow(req.ID, args.Input)
+		}
 	}
 
 	// Build the HTTP request
@@ -163,7 +187,6 @@ func handleToolCall(req jsonRPCRequest, baseURL string) jsonRPCResponse {
 	if err := json.NewDecoder(resp.Body).Decode(&httpResp); err != nil {
 		return respondDeny(req.ID, "failed to decode permission response")
 	}
-
 	// For AskUserQuestion, always deny the tool but include the user's answer
 	// so Claude can proceed with that information
 	if args.ToolName == "AskUserQuestion" && httpResp.Answer != "" {

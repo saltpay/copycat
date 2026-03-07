@@ -156,6 +156,10 @@ func main() {
 		},
 		SendSlackNotifications:      slack.SendNotifications,
 		SendSlackAssessmentFindings: slack.SendAssessmentFindings,
+		SendSlackAssessmentSummary:  slack.SendAssessmentSummary,
+		FormatForSlack: func(aiTool *config.AITool, text string) (string, error) {
+			return ai.FormatForSlack(context.Background(), aiTool, text)
+		},
 	}
 
 	result, err := input.RunDashboard(dashCfg)
@@ -378,7 +382,7 @@ func processProject(job ProcessJob) ProcessResult {
 	// Restore agent instruction files before committing
 	if len(removedFiles) > 0 {
 		if restoreErr := ai.RestoreInstructionFiles(ctx, targetPath, removedFiles); restoreErr != nil {
-			log.Printf("⚠️ Failed to restore instruction files for %s: %v", project.Repo, restoreErr)
+			log.Printf("⚠ Failed to restore instruction files for %s: %v", project.Repo, restoreErr)
 		}
 	}
 
@@ -457,10 +461,7 @@ func processProject(job ProcessJob) ProcessResult {
 func processReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
 	filesystem.CreateWorkspace()
 
-	checkpoint := parallelism
-	if checkpoint < 5 {
-		checkpoint = 5
-	}
+	checkpoint := appCfg.CheckpointInterval()
 
 	var jobs []ProcessJob
 	for _, project := range selectedProjects {
@@ -497,6 +498,14 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 	var mu sync.Mutex
 	resultMap := make(map[string]ProcessResult)
 
+	// checkpoint=0 means "automatic" (no pauses) — process all jobs in one batch.
+	if checkpoint <= 0 {
+		checkpoint = len(jobs)
+		if checkpoint == 0 {
+			checkpoint = 1
+		}
+	}
+
 	// Process in batches, pausing between them for user confirmation
 	for batchStart := 0; batchStart < len(jobs); batchStart += checkpoint {
 		batchEnd := batchStart + checkpoint
@@ -531,13 +540,13 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 					var status string
 					switch {
 					case result.Success:
-						status = fmt.Sprintf("Completed ✅ PR: \033]8;;%s\033\\%s\033]8;;\033\\", result.PRURL, result.PRURL)
+						status = fmt.Sprintf("Completed ✓ PR: \033]8;;%s\033\\%s\033]8;;\033\\", result.PRURL, result.PRURL)
 					case result.Skipped:
 						status = fmt.Sprintf("Skipped ⊘ %v", result.Error)
 					case result.Error == errCancelled:
 						status = "Cancelled ✗"
 					default:
-						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+						status = fmt.Sprintf("Failed ⚠ %v", result.Error)
 					}
 					sender.Done(repo, status, result.Success, result.Skipped, result.PRURL, result.Error, result.AIOutput)
 				}
@@ -565,13 +574,14 @@ func processReposWithSender(sender *input.StatusSender, selectedProjects []confi
 
 // AssessJob represents a single project assessment job.
 type AssessJob struct {
-	Ctx          context.Context
-	Project      config.Project
-	AITool       *config.AITool
-	AppConfig    config.Config
-	Prompt       string
-	IgnoreFiles  []string
-	UpdateStatus func(status string)
+	Ctx           context.Context
+	Project       config.Project
+	AITool        *config.AITool
+	AppConfig     config.Config
+	Prompt        string
+	IgnoreFiles   []string
+	MCPConfigPath string
+	UpdateStatus  func(status string)
 }
 
 // AssessResult represents the result of assessing a single project.
@@ -622,7 +632,7 @@ func assessProject(job AssessJob) AssessResult {
 
 	// Assess
 	job.UpdateStatus("Running assessment...")
-	finding, err := ai.Assess(ctx, job.AITool, job.Prompt, targetPath, project.Repo)
+	finding, err := ai.Assess(ctx, job.AITool, job.Prompt, targetPath, job.MCPConfigPath, project.Repo)
 	if err != nil {
 		cleanup()
 		if ctx.Err() != nil {
@@ -635,7 +645,12 @@ func assessProject(job AssessJob) AssessResult {
 	job.UpdateStatus("Cleaning up...")
 	cleanup()
 
-	return AssessResult{Project: project, Success: true, Finding: strings.TrimSpace(finding)}
+	trimmed := strings.TrimSpace(finding)
+	if trimmed == "" {
+		return AssessResult{Project: project, Error: fmt.Errorf("assessment returned empty response")}
+	}
+
+	return AssessResult{Project: project, Success: true, Finding: trimmed}
 }
 
 func assessReposWithSender(sender *input.StatusSender, selectedProjects []config.Project, setup *input.WizardResult, appCfg config.Config, parallelism int) {
@@ -645,16 +660,18 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 	sender.PostStatus("Rewriting question for per-project assessment...")
 	rewrittenPrompt, err := ai.RewritePromptForProject(context.Background(), setup.AITool, setup.Prompt)
 	if err != nil {
-		sender.PostStatus(fmt.Sprintf("⚠️ Failed to rewrite prompt, using original: %v", err))
+		sender.ReplacePostStatus(fmt.Sprintf("⚠ Failed to rewrite prompt, using original: %v", err))
 		rewrittenPrompt = setup.Prompt
 	} else {
-		sender.PostStatus(fmt.Sprintf("✓ Rewritten question: %s", rewrittenPrompt))
+		preview := strings.ReplaceAll(rewrittenPrompt, "\n", " ")
+		if len(preview) > 80 {
+			preview = preview[:77] + "..."
+		}
+		sender.ReplacePostStatus(fmt.Sprintf("✓ Rewritten question: %s", preview))
+		sender.UpdatePrompt(rewrittenPrompt)
 	}
 
-	checkpoint := parallelism
-	if checkpoint < 5 {
-		checkpoint = 5
-	}
+	checkpoint := appCfg.CheckpointInterval()
 
 	var jobs []AssessJob
 	for _, project := range selectedProjects {
@@ -670,12 +687,13 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 			ignoreFiles = appCfg.AgentInstructions
 		}
 		jobs = append(jobs, AssessJob{
-			Ctx:         ctx,
-			Project:     project,
-			AITool:      setup.AITool,
-			AppConfig:   appCfg,
-			Prompt:      rewrittenPrompt,
-			IgnoreFiles: ignoreFiles,
+			Ctx:           ctx,
+			Project:       project,
+			AITool:        setup.AITool,
+			AppConfig:     appCfg,
+			Prompt:        rewrittenPrompt,
+			IgnoreFiles:   ignoreFiles,
+			MCPConfigPath: sender.MCPConfigPath,
 		})
 	}
 
@@ -686,6 +704,14 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 
 	var mu sync.Mutex
 	findings := make(map[string]string)
+
+	// checkpoint=0 means "automatic" (no pauses) — process all jobs in one batch.
+	if checkpoint <= 0 {
+		checkpoint = len(jobs)
+		if checkpoint == 0 {
+			checkpoint = 1
+		}
+	}
 
 	for batchStart := 0; batchStart < len(jobs); batchStart += checkpoint {
 		batchEnd := batchStart + checkpoint
@@ -718,11 +744,11 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 						mu.Lock()
 						findings[repo] = result.Finding
 						mu.Unlock()
-						status = "Assessed ✅"
+						status = "Assessed ✓"
 					} else if result.Error == errCancelled {
 						status = "Cancelled ✗"
 					} else {
-						status = fmt.Sprintf("Failed ⚠️ %v", result.Error)
+						status = fmt.Sprintf("Failed ⚠ %v", result.Error)
 					}
 					sender.Done(repo, status, result.Success, false, "", result.Error, "")
 				}
@@ -750,7 +776,7 @@ func assessReposWithSender(sender *input.StatusSender, selectedProjects []config
 		sender.PostStatus("Summarizing findings across all projects...")
 		summary, err := ai.SummarizeFindings(context.Background(), setup.AITool, findings)
 		if err != nil {
-			sender.PostStatus(fmt.Sprintf("⚠️ Failed to summarize findings: %v", err))
+			sender.PostStatus(fmt.Sprintf("⚠ Failed to summarize findings: %v", err))
 			summary = "Summary generation failed."
 		}
 		sender.AssessmentResult(summary, findings)

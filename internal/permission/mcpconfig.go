@@ -4,44 +4,50 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 )
 
 type mcpConfig struct {
 	MCPServers map[string]json.RawMessage `json:"mcpServers"`
 }
 
-// readUserMCPServers reads the user's ~/.claude.json and returns their mcpServers map.
-// Returns nil on any error (file missing, parse error, no key) — never blocks GenerateMCPConfig.
-func readUserMCPServers() map[string]json.RawMessage {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
+// ParseBashPrefixes extracts Bash command prefixes from an AllowedTools list.
+// For example, "Bash(tree:*)" → "tree", "Bash(./mvnw test:*)" → "./mvnw test".
+// Non-Bash entries (Edit, Read(*), List(*)) are skipped since those are
+// handled by --permission-mode acceptEdits.
+func ParseBashPrefixes(allowedTools []string) []string {
+	var prefixes []string
+	for _, t := range allowedTools {
+		if !strings.HasPrefix(t, "Bash(") || !strings.HasSuffix(t, ")") {
+			continue
+		}
+		inner := t[5 : len(t)-1] // strip "Bash(" and ")"
+		// Remove trailing ":*" glob if present
+		inner = strings.TrimSuffix(inner, ":*")
+		if inner != "" {
+			prefixes = append(prefixes, inner)
+		}
 	}
-
-	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
-	if err != nil {
-		return nil
-	}
-
-	var parsed struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil
-	}
-
-	return parsed.MCPServers
+	return prefixes
 }
 
 // GenerateMCPConfig creates a temporary MCP configuration file that points
 // Claude Code's permission-prompt-tool at the copycat permission-handler subcommand.
 // It also merges the user's MCP servers from ~/.claude.json so they remain available.
+// The preapprovedTools list (from config's allowed_tools) is parsed for Bash prefixes
+// and passed to the handler via the COPYCAT_PREAPPROVED_TOOLS env var.
 // Returns the file path and a cleanup function that removes it.
-func GenerateMCPConfig(port int) (string, func(), error) {
+func GenerateMCPConfig(port int, preapprovedTools []string) (string, func(), error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	env := map[string]string{
+		"COPYCAT_PERMISSION_PORT": fmt.Sprintf("%d", port),
+	}
+	if prefixes := ParseBashPrefixes(preapprovedTools); len(prefixes) > 0 {
+		env["COPYCAT_PREAPPROVED_TOOLS"] = strings.Join(prefixes, ",")
 	}
 
 	copycatAuth := struct {
@@ -51,9 +57,7 @@ func GenerateMCPConfig(port int) (string, func(), error) {
 	}{
 		Command: exe,
 		Args:    []string{"permission-handler"},
-		Env: map[string]string{
-			"COPYCAT_PERMISSION_PORT": fmt.Sprintf("%d", port),
-		},
+		Env:     env,
 	}
 
 	copycatAuthRaw, err := json.Marshal(copycatAuth)
@@ -61,12 +65,12 @@ func GenerateMCPConfig(port int) (string, func(), error) {
 		return "", nil, fmt.Errorf("failed to marshal copycat-auth config: %w", err)
 	}
 
-	// Start with the user's MCP servers, then add copycat-auth (takes precedence).
-	servers := readUserMCPServers()
-	if servers == nil {
-		servers = make(map[string]json.RawMessage)
+	// Only include copycat-auth — user MCP servers are loaded via --setting-sources
+	// and must not be duplicated here (remote/SSE servers can block Claude startup
+	// if they are unreachable).
+	servers := map[string]json.RawMessage{
+		"copycat-auth": json.RawMessage(copycatAuthRaw),
 	}
-	servers["copycat-auth"] = json.RawMessage(copycatAuthRaw)
 
 	cfg := mcpConfig{MCPServers: servers}
 

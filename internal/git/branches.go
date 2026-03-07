@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/saltpay/copycat/v2/internal/config"
-	"github.com/saltpay/copycat/v2/internal/util"
 )
 
 // ErrBranchExists is returned when a branch already exists and the skip strategy is used.
@@ -78,8 +76,8 @@ func SelectOrCreateBranch(ctx context.Context, repoPath, prTitle, branchStrategy
 		return createBranchOrSkip(ctx, repoPath, specifiedBranch)
 	}
 
-	// Handle "Always create new" strategy (default)
-	return createNewBranch(ctx, repoPath, prTitle)
+	// Default: create branch with specified name
+	return checkoutOrCreateBranch(ctx, repoPath, specifiedBranch)
 }
 
 // checkoutOrCreateBranch checks out a branch if it exists, or creates it if it doesn't
@@ -138,27 +136,4 @@ func branchExistsRemotely(ctx context.Context, repoPath, branchName string) bool
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", fmt.Sprintf("origin/%s", branchName))
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
-}
-
-// createNewBranch creates a new branch with timestamp and slug
-func createNewBranch(ctx context.Context, repoPath, prTitle string) (string, error) {
-	timestamp := time.Now().Format("20060102-150405")
-	slug := util.CreateSlugFromTitle(prTitle)
-
-	var newBranch string
-	if slug != "" {
-		newBranch = fmt.Sprintf("copycat-%s-%s", timestamp, slug)
-	} else {
-		// Fallback to just timestamp if slug is empty
-		newBranch = fmt.Sprintf("copycat-%s", timestamp)
-	}
-
-	cmd := exec.CommandContext(ctx, "git", "checkout", "-b", newBranch)
-	cmd.Dir = repoPath
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to create branch: %w\nOutput: %s", err, string(output))
-	}
-
-	return newBranch, nil
 }

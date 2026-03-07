@@ -49,7 +49,7 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 	}
 
 	if len(projectsByRoom) == 0 {
-		onStatus("⚠️  No Slack rooms configured for successful projects, skipping notifications")
+		onStatus("⚠  No Slack rooms configured for successful projects, skipping notifications")
 		return
 	}
 
@@ -63,7 +63,7 @@ func SendNotifications(successfulProjects []config.Project, prTitle string, prUR
 			repoNames[i] = r.Repo
 		}
 		if err != nil {
-			onStatus(fmt.Sprintf("⚠️  Failed to send notification to %s for: %s: %v", channel, strings.Join(repoNames, ", "), err))
+			onStatus(fmt.Sprintf("⚠  Failed to send notification to %s for: %s: %v", channel, strings.Join(repoNames, ", "), err))
 		} else {
 			onStatus(fmt.Sprintf("✓ Notification sent to %s for: %s", channel, strings.Join(repoNames, ", ")))
 		}
@@ -87,7 +87,7 @@ func SendAssessmentFindings(projects []config.Project, question string, findings
 	}
 
 	if len(projectsByRoom) == 0 {
-		onStatus("⚠️  No Slack rooms configured for assessed projects, skipping notifications")
+		onStatus("⚠  No Slack rooms configured for assessed projects, skipping notifications")
 		return
 	}
 
@@ -109,10 +109,27 @@ func SendAssessmentFindings(projects []config.Project, question string, findings
 		err := sendMessage(token, channel, message)
 		repoNames := strings.Join(repos, ", ")
 		if err != nil {
-			onStatus(fmt.Sprintf("⚠️  Failed to send findings to %s for: %s: %v", channel, repoNames, err))
+			onStatus(fmt.Sprintf("⚠  Failed to send findings to %s for: %s: %v", channel, repoNames, err))
 		} else {
 			onStatus(fmt.Sprintf("✓ Findings sent to %s for: %s", channel, repoNames))
 		}
+	}
+}
+
+// SendAssessmentSummary sends the assessment summary report to a specific Slack channel.
+func SendAssessmentSummary(summary string, channel string, token string, onStatus func(string)) {
+	channel = strings.TrimSpace(channel)
+	if channel == "" || summary == "" {
+		onStatus("⚠  No channel or summary provided, skipping summary notification")
+		return
+	}
+
+	onStatus(fmt.Sprintf("Sending assessment summary to %s...", channel))
+	message := fmt.Sprintf("🐱 *Assessment Summary*\n\n%s", summary)
+	if err := sendMessage(token, channel, message); err != nil {
+		onStatus(fmt.Sprintf("⚠  Failed to send summary to %s: %v", channel, err))
+	} else {
+		onStatus(fmt.Sprintf("✓ Summary sent to %s", channel))
 	}
 }
 

@@ -107,11 +107,17 @@ github:
   organization: my-org
   auto_discovery_topic: copycat
 
+parallelism: 3
+confirm_move_to_next_batch: 10  # or "automatic" to never pause
+
 agent_instructions:
   - CLAUDE.md
+  - AGENTS.md
   - .claude
   - .cursorrules
   - .github/copilot-instructions.md
+
+default: claude
 
 tools:
   - name: claude
@@ -127,7 +133,6 @@ tools:
     disallowed_tools:
       - WebFetch
       - Task
-    supports_permission_prompt: true
   - name: codex
     command: codex
     code_args: [exec, --full-auto]
@@ -144,8 +149,10 @@ tools:
 projects:
   - repo: service-a
     slack_room: "#team-a"
+    topics: [go, backend]
   - repo: service-b
     slack_room: "#team-b"
+    topics: [java, backend]
 ```
 
 ### Configuration Fields
@@ -154,7 +161,10 @@ projects:
 
 - `github.organization`: GitHub organization to scan for repositories
 - `github.auto_discovery_topic` (optional): GitHub topic Copycat passes to `gh repo list`; when omitted Copycat lists all repositories
-- `agent_instructions` (optional): List of files/directories to remove from cloned repos when "Ignore Agent Instructions" is enabled. Defaults to `CLAUDE.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`. Files are deleted before the AI tool runs and restored via `git checkout` before committing, so they never appear in the PR.
+- `parallelism` (optional): Number of repositories to process concurrently. Defaults to `3`, maximum `10`.
+- `confirm_move_to_next_batch` (optional): Controls when Copycat pauses between batches for confirmation. Set to a number to pause every N repos, or `automatic` to never pause. Defaults to `10`.
+- `agent_instructions` (optional): List of files/directories to remove from cloned repos when "Ignore Agent Instructions" is enabled. Defaults to `CLAUDE.md`, `AGENTS.md`, `.claude`, `.cursorrules`, `.github/copilot-instructions.md`. Files are deleted before the AI tool runs and restored via `git checkout` before committing, so they never appear in the PR.
+- `default` (optional): Name of the default AI tool to pre-select. Defaults to the first tool in the list.
 - `tools`: List of AI tools available in the selector
   - `name`: Identifier for the tool
   - `command`: CLI command to execute
@@ -162,13 +172,14 @@ projects:
   - `summary_args`: Arguments passed when generating PR descriptions (optional)
   - `allowed_tools` (optional, Claude-specific): Allowlist of tools the AI can use
   - `disallowed_tools` (optional, Claude-specific): Blocklist of tools
-  - `supports_permission_prompt` (optional, Claude-specific): Enable interactive permission prompting for non-allowlisted commands
+
 
 **`projects.yaml`:**
 
 - `projects`: List of repositories (synced from GitHub or added manually)
   - `repo`: Repository name
   - `slack_room`: Slack channel for notifications (optional)
+  - `topics`: GitHub topics associated with the repository (optional, synced from GitHub via `r` in the project selector)
 
 When Copycat lists repositories it uses the configured discovery topic if provided, otherwise it fetches every unarchived repository in the organization. Press 'r' in the project selector to sync repositories from GitHub.
 
@@ -228,13 +239,13 @@ Creates GitHub issues across selected repositories and assigns them to @copilot.
 
 **Note:** The Copilot agent does not sign commits, so you'll need to fix unsigned commits before merging.
 
-#### 2. Perform Changes Locally
+#### 2. Perform Changes
 
 Clones repositories, applies changes using your configured AI coding assistant, and creates pull requests.
 
 **Steps:**
 1. Select repositories from the list (or type "all")
-2. Choose "Perform Changes Locally"
+2. Choose "Perform Changes"
 3. Enter PR title (you'll be reminded to include a ticket reference if needed)
 4. Enter the AI prompt:
    - **Single line**: Type or paste the prompt and press Enter

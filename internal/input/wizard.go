@@ -15,6 +15,9 @@ type wizardCompletedMsg struct {
 	Result WizardResult
 }
 
+// wizardBackMsg is emitted when the user goes back from the first wizard step.
+type wizardBackMsg struct{}
+
 // editorRequestedMsg is emitted when the user presses ctrl+e to open an editor.
 type editorRequestedMsg struct{}
 
@@ -106,13 +109,12 @@ func newWizardModel(aiToolsConfig *config.AIToolsConfig, agentInstructions []str
 	m := wizardModel{
 		selectedProjects: selectedProjects,
 		actionOptions: []string{
-			"Perform Changes Locally",
+			"Perform Changes",
 			"Run Assessment",
 		},
 		currentStep: stepAction,
 		aiTools:     aiToolsConfig.Tools,
 		branchOptions: []string{
-			"Always create new branches",
 			"Specify branch name (reuse if exists)",
 			"Specify branch name (skip if exists)",
 		},
@@ -185,8 +187,8 @@ func (m wizardModel) updateActionStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch keyMsg.String() {
-	case "q":
-		return m, tea.Quit
+	case "q", "esc":
+		return m.previousStep()
 	case "up", "k":
 		if m.actionCursor > 0 {
 			m.actionCursor--
@@ -224,8 +226,8 @@ func (m wizardModel) updateAIToolStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch keyMsg.String() {
-	case "q":
-		return m, tea.Quit
+	case "q", "esc":
+		return m.previousStep()
 	case "up", "k":
 		if m.aiToolCursor > 0 {
 			m.aiToolCursor--
@@ -253,8 +255,8 @@ func (m wizardModel) updateIgnoreInstructionsStep(msg tea.Msg) (tea.Model, tea.C
 		return m, nil
 	}
 	switch keyMsg.String() {
-	case "q":
-		return m, tea.Quit
+	case "q", "esc":
+		return m.previousStep()
 	case " ":
 		m.ignoreInstructions = !m.ignoreInstructions
 	case "enter":
@@ -270,8 +272,8 @@ func (m wizardModel) updateBranchStrategyStep(msg tea.Msg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 	switch keyMsg.String() {
-	case "q":
-		return m, tea.Quit
+	case "q", "esc":
+		return m.previousStep()
 	case "up", "k":
 		if m.branchCursor > 0 {
 			m.branchCursor--
@@ -310,7 +312,7 @@ func (m wizardModel) updateBranchNameStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentStep = stepPRTitle
 			return m, textinput.Blink
 		case tea.KeyEsc:
-			return m, tea.Quit
+			return m.previousStep()
 		}
 	}
 	var cmd tea.Cmd
@@ -333,7 +335,7 @@ func (m wizardModel) updatePRTitleStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentStep = stepPrompt
 			return m, textinput.Blink
 		case tea.KeyEsc:
-			return m, tea.Quit
+			return m.previousStep()
 		}
 	}
 	var cmd tea.Cmd
@@ -358,7 +360,7 @@ func (m wizardModel) updatePromptStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, func() tea.Msg { return wizardCompletedMsg{Result: m.buildResult()} }
 		case tea.KeyEsc:
-			return m, tea.Quit
+			return m.previousStep()
 		}
 		if keyMsg.String() == "ctrl+e" {
 			return m, func() tea.Msg { return editorRequestedMsg{} }
@@ -390,7 +392,7 @@ func (m wizardModel) View() string {
 		var label string
 		switch m.action {
 		case "local":
-			label = "Perform Changes Locally"
+			label = "Perform Changes"
 		case "assessment":
 			label = "Run Assessment"
 		}
@@ -408,7 +410,7 @@ func (m wizardModel) View() string {
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
-		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
+		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • esc: back • ctrl+c: quit"))
 		b.WriteString("\n")
 		return b.String()
 	}
@@ -425,13 +427,13 @@ func (m wizardModel) View() string {
 	b.WriteString("\n")
 	switch m.currentStep {
 	case stepAITool, stepBranchStrategy:
-		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • q/ctrl+c: quit"))
+		b.WriteString(helpStyle.Render("  ↑/↓: navigate • enter: select • esc: back • ctrl+c: quit"))
 	case stepBranchName, stepPRTitle:
-		b.WriteString(helpStyle.Render("  enter: submit • esc/ctrl+c: quit"))
+		b.WriteString(helpStyle.Render("  enter: submit • esc: back • ctrl+c: quit"))
 	case stepPrompt:
-		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc/ctrl+c: quit"))
+		b.WriteString(helpStyle.Render("  enter: submit • ctrl+e: open editor • esc: back • ctrl+c: quit"))
 	case stepIgnoreInstructions:
-		b.WriteString(helpStyle.Render("  space: toggle • enter: confirm • q/ctrl+c: quit"))
+		b.WriteString(helpStyle.Render("  space: toggle • enter: confirm • esc: back • ctrl+c: quit"))
 	}
 	b.WriteString("\n")
 
@@ -516,12 +518,7 @@ func (m wizardModel) viewLocalFields(b *strings.Builder, completed, label, pendi
 
 	// Prompt
 	if m.prompt != "" && m.currentStep != stepPrompt {
-		display := m.prompt
-		if len(display) > 60 {
-			display = display[:57] + "..."
-		}
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Prompt: %s", display)))
-		b.WriteString("\n")
+		m.viewCompletedPrompt(b, completed, "Prompt")
 	} else if m.currentStep == stepPrompt {
 		b.WriteString(label.Render("  Prompt"))
 		b.WriteString("\n")
@@ -564,12 +561,7 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 
 	// Prompt
 	if m.prompt != "" && m.currentStep != stepPrompt {
-		display := m.prompt
-		if len(display) > 60 {
-			display = display[:57] + "..."
-		}
-		b.WriteString(completed.Render(fmt.Sprintf("  ✓ Question: %s", display)))
-		b.WriteString("\n")
+		m.viewCompletedPrompt(b, completed, "Question")
 	} else if m.currentStep == stepPrompt {
 		b.WriteString(label.Render("  Assessment Question"))
 		b.WriteString("\n")
@@ -584,6 +576,17 @@ func (m wizardModel) viewAssessmentFields(b *strings.Builder, completed, label, 
 	if !m.skipIgnoreInstructions {
 		m.viewIgnoreInstructions(b, completed, label, pending, cursor, hint)
 	}
+}
+
+// viewCompletedPrompt renders the completed prompt as a truncated line.
+func (m wizardModel) viewCompletedPrompt(b *strings.Builder, completed lipgloss.Style, label string) {
+	display := strings.ReplaceAll(m.prompt, "\n", " ")
+	if len(display) > 80 {
+		display = display[:77] + "..."
+	}
+
+	b.WriteString(completed.Render(fmt.Sprintf("  ✓ %s: %s", label, display)))
+	b.WriteString("\n")
 }
 
 func (m wizardModel) viewIgnoreInstructions(b *strings.Builder, completed, label, pending, cursor, hint lipgloss.Style) {
@@ -635,4 +638,75 @@ func (m wizardModel) buildResult() WizardResult {
 		PRTitle:                 m.prTitle,
 		Prompt:                  m.prompt,
 	}
+}
+
+// previousStep navigates back to the previous wizard step, clearing values along the way.
+func (m wizardModel) previousStep() (tea.Model, tea.Cmd) {
+	switch m.currentStep {
+	case stepAction:
+		// Go back to project selector
+		return m, func() tea.Msg { return wizardBackMsg{} }
+
+	case stepAITool:
+		m.aiTool = nil
+		m.action = ""
+		m.currentStep = stepAction
+		return m, nil
+
+	case stepBranchStrategy:
+		m.branchStrategy = ""
+		if !m.skipAITool {
+			m.currentStep = stepAITool
+		} else {
+			m.action = ""
+			m.currentStep = stepAction
+		}
+		return m, nil
+
+	case stepBranchName:
+		m.branchName = ""
+		m.branchNameInput.Blur()
+		m.branchNameInput.SetValue("")
+		m.currentStep = stepBranchStrategy
+		return m, nil
+
+	case stepPRTitle:
+		m.prTitle = ""
+		m.prTitleInput.Blur()
+		m.prTitleInput.SetValue("")
+		if m.needsBranchName {
+			m.branchNameInput.Focus()
+			m.currentStep = stepBranchName
+			return m, textinput.Blink
+		}
+		m.currentStep = stepBranchStrategy
+		return m, nil
+
+	case stepPrompt:
+		m.prompt = ""
+		m.promptInput.Blur()
+		m.promptInput.SetValue("")
+		if m.action == "local" {
+			m.prTitleInput.Focus()
+			m.currentStep = stepPRTitle
+			return m, textinput.Blink
+		}
+		// Assessment path
+		if !m.skipAITool {
+			m.currentStep = stepAITool
+		} else {
+			m.action = ""
+			m.currentStep = stepAction
+		}
+		return m, nil
+
+	case stepIgnoreInstructions:
+		m.ignoreInstructionsSet = false
+		m.ignoreInstructions = false
+		m.promptInput.Focus()
+		m.currentStep = stepPrompt
+		return m, textinput.Blink
+	}
+
+	return m, nil
 }

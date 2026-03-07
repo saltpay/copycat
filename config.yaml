@@ -33,7 +33,7 @@ tools:
     disallowed_tools:
       - WebFetch
       - Task
-    supports_permission_prompt: true
+
   - name: codex
     command: codex
     code_args:
