@@ -636,8 +636,8 @@ func (m dashboardModel) startProcessing() (tea.Model, tea.Cmd) {
 		CancelRegistry: m.cancelRegistry,
 	}
 
-	// Set up permission server if the AI tool supports it (skip for assessment — read-only)
-	if m.wizardResult.Action != "assessment" && m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
+	// Set up permission server if the AI tool supports it
+	if m.wizardResult.AITool != nil && m.wizardResult.AITool.SupportsPermissionPrompt {
 		permServer, err := permission.NewPermissionServer(m.statusCh)
 		if err != nil {
 			log.Printf("⚠ Failed to start permission server: %v", err)

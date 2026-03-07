@@ -45,8 +45,13 @@ func RewritePromptForProject(ctx context.Context, aiTool *config.AITool, userPro
 	return strings.TrimSpace(string(output)), nil
 }
 
-func Assess(ctx context.Context, aiTool *config.AITool, prompt string, targetPath string, repoName string) (string, error) {
-	cmd := aiTool.BuildCommandContext(ctx, prompt, aiTool.CodeArgs)
+func Assess(ctx context.Context, aiTool *config.AITool, prompt string, targetPath string, mcpConfigPath string, repoName string) (string, error) {
+	var opts []config.CommandOptions
+	if mcpConfigPath != "" {
+		opts = append(opts, config.CommandOptions{MCPConfigPath: mcpConfigPath})
+	}
+
+	cmd := aiTool.BuildCommandContext(ctx, prompt, aiTool.CodeArgs, opts...)
 	cmd.Dir = targetPath
 	if repoName != "" {
 		cmd.Env = append(os.Environ(), "COPYCAT_REPO_NAME="+repoName)
