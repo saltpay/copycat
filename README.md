@@ -2,9 +2,7 @@
 
 Welcome to Copycat, a way to copy changes from one git repository to another.
 
-<img src="./logo.png"
-     alt="Copycat logo"
-     style="margin-bottom: 10px; animation: spin 2s linear infinite; transform-origin: center center;" />
+<img src="./logo.png" alt="Copycat logo" width="200" />
 
 Copycat is an automation tool that enables you to apply consistent changes across multiple GitHub repositories using AI coding assistants. It streamlines the process of creating issues or performing code changes at scale with support for multiple AI tools including Claude, Codex, Qwen, and others.
 

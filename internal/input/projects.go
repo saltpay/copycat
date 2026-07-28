@@ -294,18 +294,28 @@ func (m projectSelectorModel) filterProjectsByTopic(filterText string) []config.
 	terms := strings.Fields(filterTextLower)
 
 	for _, project := range m.projects {
-		// Check if the project has any of the terms in its topics
+		// Check if the project matches any of the terms via topics, repo name, or aliases
 		anyTermMatches := false
 		for _, term := range terms {
 			for _, topic := range project.Topics {
-				// Use strings.Contains to allow partial matches
 				if strings.Contains(strings.ToLower(topic), term) {
 					anyTermMatches = true
 					break
 				}
 			}
+			if !anyTermMatches && strings.Contains(strings.ToLower(project.Repo), term) {
+				anyTermMatches = true
+			}
+			if !anyTermMatches {
+				for _, alias := range project.Aliases {
+					if strings.Contains(strings.ToLower(alias), term) {
+						anyTermMatches = true
+						break
+					}
+				}
+			}
 			if anyTermMatches {
-				break // Found a match, no need to check other terms
+				break
 			}
 		}
 
@@ -336,10 +346,24 @@ func (m projectSelectorModel) applyAllFilters() []config.Project {
 		for _, term := range allTerms {
 			termLower := strings.ToLower(term)
 			termMatches := false
+			// Match against topics
 			for _, topic := range project.Topics {
 				if strings.Contains(strings.ToLower(topic), termLower) {
 					termMatches = true
 					break
+				}
+			}
+			// Match against repo name
+			if !termMatches && strings.Contains(strings.ToLower(project.Repo), termLower) {
+				termMatches = true
+			}
+			// Match against aliases
+			if !termMatches {
+				for _, alias := range project.Aliases {
+					if strings.Contains(strings.ToLower(alias), termLower) {
+						termMatches = true
+						break
+					}
 				}
 			}
 			if !termMatches {

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Project struct {
 	Repo      string   `yaml:"repo"`
+	Aliases   []string `yaml:"aliases,omitempty"`
 	SlackRoom string   `yaml:"slack_room"`
 	Topics    []string `yaml:"topics,omitempty"`
 }
@@ -142,6 +144,12 @@ func (c *AIToolsConfig) ToolByName(name string) (*AITool, bool) {
 	return nil, false
 }
 
+// trimGitSuffix removes a trailing ".git" suffix from a repo name to prevent
+// double-suffix bugs when constructing clone URLs.
+func trimGitSuffix(name string) string {
+	return strings.TrimSuffix(name, ".git")
+}
+
 // Save writes the configuration to a file with readable formatting.
 func (c *Config) Save(filename string) error {
 	// Marshal each section separately to add spacing between them
@@ -189,6 +197,10 @@ func LoadProjects(filename string) ([]Project, error) {
 	}
 	if err := yaml.Unmarshal(data, &wrapper); err != nil {
 		return nil, fmt.Errorf("failed to parse projects file %s: %w", filename, err)
+	}
+
+	for i := range wrapper.Projects {
+		wrapper.Projects[i].Repo = trimGitSuffix(wrapper.Projects[i].Repo)
 	}
 
 	return wrapper.Projects, nil

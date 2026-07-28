@@ -3,6 +3,7 @@ package git
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/saltpay/copycat/v2/internal/config"
 )
@@ -48,7 +49,7 @@ func FetchRepositories(githubCfg config.GitHubConfig) ([]config.Project, error) 
 		}
 
 		project := config.Project{
-			Repo:   repo.Name,
+			Repo:   strings.TrimSuffix(repo.Name, ".git"),
 			Topics: topics,
 		}
 		projects = append(projects, project)
