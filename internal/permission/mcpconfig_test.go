@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
 func TestGenerateMCPConfig(t *testing.T) {
-	path, cleanup, err := GenerateMCPConfig(12345)
+	path, cleanup, err := GenerateMCPConfig(12345, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +66,9 @@ func TestGenerateMCPConfig(t *testing.T) {
 	}
 }
 
-func TestGenerateMCPConfig_MergesUserServers(t *testing.T) {
-	// Create a fake ~/.claude.json with user MCP servers.
+func TestGenerateMCPConfig_DoesNotMergeUserServers(t *testing.T) {
+	// User MCP servers from ~/.claude.json should NOT be merged —
+	// they are loaded via --setting-sources user by Claude Code directly.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -75,10 +77,6 @@ func TestGenerateMCPConfig_MergesUserServers(t *testing.T) {
 			"teya-developer": map[string]any{
 				"command": "npx",
 				"args":    []string{"-y", "@anthropic-ai/mcp-server"},
-				"env":     map[string]string{"API_KEY": "secret"},
-			},
-			"jetbrains": map[string]any{
-				"url": "http://localhost:6637/sse",
 			},
 		},
 	}
@@ -90,7 +88,7 @@ func TestGenerateMCPConfig_MergesUserServers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, cleanup, err := GenerateMCPConfig(9999)
+	path, cleanup, err := GenerateMCPConfig(9999, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,22 +104,12 @@ func TestGenerateMCPConfig_MergesUserServers(t *testing.T) {
 		t.Fatal("failed to parse MCP config:", err)
 	}
 
-	// All three servers should be present.
-	for _, name := range []string{"copycat-auth", "teya-developer", "jetbrains"} {
-		if _, ok := cfg.MCPServers[name]; !ok {
-			t.Errorf("expected server %q in merged config", name)
-		}
+	// Only copycat-auth should be present.
+	if _, ok := cfg.MCPServers["copycat-auth"]; !ok {
+		t.Error("expected copycat-auth server in config")
 	}
-
-	// Verify the user's jetbrains server kept its url field.
-	var jb struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal(cfg.MCPServers["jetbrains"], &jb); err != nil {
-		t.Fatal(err)
-	}
-	if jb.URL != "http://localhost:6637/sse" {
-		t.Errorf("expected jetbrains url http://localhost:6637/sse, got %s", jb.URL)
+	if _, ok := cfg.MCPServers["teya-developer"]; ok {
+		t.Error("user MCP servers should not be merged into the config")
 	}
 }
 
@@ -146,7 +134,7 @@ func TestGenerateMCPConfig_CopycatAuthTakesPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, cleanup, err := GenerateMCPConfig(7777)
+	path, cleanup, err := GenerateMCPConfig(7777, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,5 +166,110 @@ func TestGenerateMCPConfig_CopycatAuthTakesPrecedence(t *testing.T) {
 
 	if server.Env["COPYCAT_PERMISSION_PORT"] != "7777" {
 		t.Errorf("expected port 7777, got %s", server.Env["COPYCAT_PERMISSION_PORT"])
+	}
+}
+
+func TestParseBashPrefixes(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "bash patterns extracted",
+			input:    []string{"Bash(tree:*)", "Bash(cat:*)", "Bash(./mvnw test:*)"},
+			expected: []string{"tree", "cat", "./mvnw test"},
+		},
+		{
+			name:     "non-bash entries skipped",
+			input:    []string{"Edit", "Read(*)", "List(*)", "Bash(grep:*)"},
+			expected: []string{"grep"},
+		},
+		{
+			name:     "empty input",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "no bash entries",
+			input:    []string{"Edit", "Read(*)", "List(*)"},
+			expected: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseBashPrefixes(tc.input)
+			if !reflect.DeepEqual(got, tc.expected) {
+				t.Errorf("ParseBashPrefixes(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateMCPConfig_PreapprovedToolsEnvVar(t *testing.T) {
+	allowedTools := []string{
+		"Edit",
+		"Read(*)",
+		"Bash(tree:*)",
+		"Bash(./mvnw test:*)",
+	}
+
+	path, cleanup, err := GenerateMCPConfig(5555, allowedTools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg mcpConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal("failed to parse MCP config:", err)
+	}
+
+	var server struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(cfg.MCPServers["copycat-auth"], &server); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "tree,./mvnw test"
+	if got := server.Env["COPYCAT_PREAPPROVED_TOOLS"]; got != expected {
+		t.Errorf("expected COPYCAT_PREAPPROVED_TOOLS=%q, got %q", expected, got)
+	}
+}
+
+func TestGenerateMCPConfig_NoPreapprovedToolsEnvVar(t *testing.T) {
+	// When no Bash patterns exist, env var should not be set
+	path, cleanup, err := GenerateMCPConfig(5556, []string{"Edit", "Read(*)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg mcpConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal("failed to parse MCP config:", err)
+	}
+
+	var server struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(cfg.MCPServers["copycat-auth"], &server); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := server.Env["COPYCAT_PREAPPROVED_TOOLS"]; ok {
+		t.Error("COPYCAT_PREAPPROVED_TOOLS should not be set when no Bash patterns exist")
 	}
 }
